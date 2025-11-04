@@ -1,0 +1,347 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: uavmetrics.uav.k3s.io
+  annotations:
+    description: "UAV Metrics CRD for collecting and managing drone telemetry data"
+spec:
+  group: uav.k3s.io
+  names:
+    kind: UAVMetrics
+    listKind: UAVMetricsList
+    plural: uavmetrics
+    singular: uavmetric
+    shortNames:
+    - uav
+    - uavs
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            required:
+            - nodeName
+            - gps
+            - battery
+            properties:
+              # 节点标识
+              nodeName:
+                type: string
+                description: "Kubernetes node name where UAV is deployed"
+
+              # GPS 位置信息
+              gps:
+                type: object
+                required:
+                - latitude
+                - longitude
+                properties:
+                  latitude:
+                    type: number
+                    format: double
+                    minimum: -90.0
+                    maximum: 90.0
+                    description: "GPS latitude in decimal degrees"
+                  longitude:
+                    type: number
+                    format: double
+                    minimum: -180.0
+                    maximum: 180.0
+                    description: "GPS longitude in decimal degrees"
+                  altitude:
+                    type: number
+                    format: double
+                    description: "Altitude in meters above sea level"
+                  heading:
+                    type: number
+                    format: double
+                    minimum: 0.0
+                    maximum: 360.0
+                    description: "Heading/direction in degrees (0-360)"
+                  speed:
+                    type: number
+                    format: double
+                    minimum: 0.0
+                    description: "Ground speed in m/s"
+                  satellites:
+                    type: integer
+                    minimum: 0
+                    description: "Number of GPS satellites connected"
+                  accuracy:
+                    type: number
+                    format: double
+                    description: "GPS accuracy in meters"
+                  lastUpdate:
+                    type: string
+                    format: date-time
+                    description: "Last GPS update timestamp"
+
+              # 电池信息
+              battery:
+                type: object
+                required:
+                - remainingPercent
+                properties:
+                  remainingPercent:
+                    type: number
+                    format: double
+                    minimum: 0.0
+                    maximum: 100.0
+                    description: "Battery remaining percentage (0-100)"
+                  voltage:
+                    type: number
+                    format: double
+                    minimum: 0.0
+                    description: "Battery voltage in volts"
+                  current:
+                    type: number
+                    format: double
+                    description: "Battery current in amperes (negative when discharging)"
+                  temperature:
+                    type: number
+                    format: double
+                    description: "Battery temperature in Celsius"
+                  timeRemaining:
+                    type: integer
+                    minimum: 0
+                    description: "Estimated time remaining in seconds"
+                  cycleCount:
+                    type: integer
+                    minimum: 0
+                    description: "Battery charge cycle count"
+
+              # 飞行状态
+              flight:
+                type: object
+                properties:
+                  armed:
+                    type: boolean
+                    description: "Whether UAV is armed"
+                  mode:
+                    type: string
+                    enum:
+                    - "MANUAL"
+                    - "STABILIZE"
+                    - "ALTITUDE_HOLD"
+                    - "POSITION_HOLD"
+                    - "AUTO"
+                    - "GUIDED"
+                    - "LOITER"
+                    - "RTL"
+                    - "LAND"
+                    - "UNKNOWN"
+                    description: "Current flight mode"
+                  isFlying:
+                    type: boolean
+                    description: "Whether UAV is currently flying"
+                  altitude:
+                    type: number
+                    format: double
+                    description: "Relative altitude from takeoff point in meters"
+                  verticalSpeed:
+                    type: number
+                    format: double
+                    description: "Vertical speed in m/s (positive = ascending)"
+                  rollAngle:
+                    type: number
+                    format: double
+                    description: "Roll angle in degrees"
+                  pitchAngle:
+                    type: number
+                    format: double
+                    description: "Pitch angle in degrees"
+                  yawAngle:
+                    type: number
+                    format: double
+                    description: "Yaw angle in degrees"
+
+              # 网络信息
+              network:
+                type: object
+                properties:
+                  latency:
+                    type: number
+                    format: double
+                    minimum: 0.0
+                    description: "Network latency to control center in milliseconds"
+                  bandwidth:
+                    type: number
+                    format: double
+                    minimum: 0.0
+                    description: "Available bandwidth in Mbps"
+                  signalStrength:
+                    type: integer
+                    minimum: -100
+                    maximum: 0
+                    description: "Signal strength in dBm"
+                  packetLoss:
+                    type: number
+                    format: double
+                    minimum: 0.0
+                    maximum: 100.0
+                    description: "Packet loss percentage"
+                  connectionType:
+                    type: string
+                    enum:
+                    - "4G"
+                    - "5G"
+                    - "WIFI"
+                    - "SATELLITE"
+                    - "UNKNOWN"
+                    description: "Network connection type"
+
+              # 性能指标
+              performance:
+                type: object
+                properties:
+                  cpuUsage:
+                    type: number
+                    format: double
+                    minimum: 0.0
+                    maximum: 100.0
+                    description: "CPU usage percentage"
+                  memoryUsage:
+                    type: number
+                    format: double
+                    minimum: 0.0
+                    maximum: 100.0
+                    description: "Memory usage percentage"
+                  diskUsage:
+                    type: number
+                    format: double
+                    minimum: 0.0
+                    maximum: 100.0
+                    description: "Disk usage percentage"
+                  temperature:
+                    type: number
+                    format: double
+                    description: "System temperature in Celsius"
+                  uptime:
+                    type: integer
+                    minimum: 0
+                    description: "System uptime in seconds"
+
+              # 健康状态
+              health:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                    - "Healthy"
+                    - "Warning"
+                    - "Critical"
+                    - "Unknown"
+                    description: "Overall health status"
+                  errors:
+                    type: array
+                    items:
+                      type: string
+                    description: "List of current errors"
+                  warnings:
+                    type: array
+                    items:
+                      type: string
+                    description: "List of current warnings"
+                  lastHealthCheck:
+                    type: string
+                    format: date-time
+                    description: "Last health check timestamp"
+
+              # 元数据
+              metadata:
+                type: object
+                properties:
+                  agentVersion:
+                    type: string
+                    description: "UAV agent version"
+                  hardwareModel:
+                    type: string
+                    description: "UAV hardware model"
+                  firmwareVersion:
+                    type: string
+                    description: "Firmware version"
+                  serialNumber:
+                    type: string
+                    description: "UAV serial number"
+
+          # Status 字段（由系统管理）
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+                enum:
+                - "Active"
+                - "Inactive"
+                - "Error"
+                - "Unknown"
+                description: "Current phase of the UAV"
+              lastUpdated:
+                type: string
+                format: date-time
+                description: "Last time the metrics were updated"
+              conditions:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                      description: "Condition type (e.g., Ready, GPSLocked)"
+                    status:
+                      type: string
+                      enum:
+                      - "True"
+                      - "False"
+                      - "Unknown"
+                      description: "Condition status"
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                      description: "Last time the condition transitioned"
+                    reason:
+                      type: string
+                      description: "Machine-readable reason"
+                    message:
+                      type: string
+                      description: "Human-readable message"
+
+    # 添加打印列，方便 kubectl get 查看
+    additionalPrinterColumns:
+    - name: Node
+      type: string
+      jsonPath: .spec.nodeName
+    - name: Battery
+      type: number
+      jsonPath: .spec.battery.remainingPercent
+    - name: GPS-Lat
+      type: number
+      jsonPath: .spec.gps.latitude
+      priority: 1
+    - name: GPS-Lon
+      type: number
+      jsonPath: .spec.gps.longitude
+      priority: 1
+    - name: Altitude
+      type: number
+      jsonPath: .spec.gps.altitude
+    - name: Status
+      type: string
+      jsonPath: .spec.health.status
+    - name: Phase
+      type: string
+      jsonPath: .status.phase
+    - name: Age
+      type: date
+      jsonPath: .metadata.creationTimestamp
+
+    # 启用 status subresource
+    subresources:
+      status: {}

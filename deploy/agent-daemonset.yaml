@@ -1,0 +1,201 @@
+---
+# ServiceAccount for UAV Agent
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: uav-agent
+  namespace: default
+  labels:
+    app: uav-agent
+
+---
+# ClusterRole - 定义权限
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: uav-agent
+  labels:
+    app: uav-agent
+rules:
+  # UAVMetrics CRD 操作权限
+  - apiGroups: ["uav.k3s.io"]
+    resources: ["uavmetrics"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # UAVMetrics status 操作权限
+  - apiGroups: ["uav.k3s.io"]
+    resources: ["uavmetrics/status"]
+    verbs: ["get", "update", "patch"]
+
+  # 读取节点信息（可选，用于获取节点详情）
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+
+---
+# ClusterRoleBinding - 绑定权限到 ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: uav-agent
+  labels:
+    app: uav-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: uav-agent
+subjects:
+  - kind: ServiceAccount
+    name: uav-agent
+    namespace: default
+
+---
+# DaemonSet - 在每个节点上运行一个 Pod
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: uav-agent
+  namespace: default
+  labels:
+    app: uav-agent
+    version: v0.1.0
+spec:
+  selector:
+    matchLabels:
+      app: uav-agent
+
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+
+  template:
+    metadata:
+      labels:
+        app: uav-agent
+        version: v0.1.0
+
+    spec:
+      serviceAccountName: uav-agent
+
+      # 容忍度 - 允许在 master 节点运行（可选）
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+
+      # Host 网络模式（如果需要访问宿主机资源）
+      # hostNetwork: true
+
+      containers:
+      - name: uav-agent
+        image: x1224403599/uav-agent:v0.1.0  # Docker Hub 公开镜像
+        imagePullPolicy: IfNotPresent  # 优先使用本地，没有则从远程拉取
+
+        env:
+        # 节点名称（从 Pod 的 spec.nodeName 获取）
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+
+        # 日志级别
+        - name: LOG_LEVEL
+          value: "info"
+
+        # 启用结构化日志
+        - name: STRUCTURED_LOGGING
+          value: "false"
+
+        # 采集间隔
+        - name: COLLECTION_INTERVAL
+          value: "10s"
+
+        # 命名空间
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+
+        # UAV 硬件信息（可以通过 ConfigMap 覆盖）
+        - name: UAV_HARDWARE_MODEL
+          value: "Generic-UAV-v1"
+        - name: UAV_FIRMWARE_VERSION
+          value: "1.0.0"
+        - name: UAV_SERIAL_NUMBER
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName  # 使用节点名作为序列号
+
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+
+        # 健康检查（可选，后续可以添加 /healthz 端点）
+        # livenessProbe:
+        #   httpGet:
+        #     path: /healthz
+        #     port: 8080
+        #   initialDelaySeconds: 30
+        #   periodSeconds: 10
+
+        # 就绪检查
+        # readinessProbe:
+        #   httpGet:
+        #     path: /readyz
+        #     port: 8080
+        #   initialDelaySeconds: 5
+        #   periodSeconds: 5
+
+        # 挂载卷（如果需要访问宿主机的 /proc /sys 等）
+        volumeMounts:
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+
+      volumes:
+      - name: proc
+        hostPath:
+          path: /proc
+      - name: sys
+        hostPath:
+          path: /sys
+
+      # 重启策略
+      restartPolicy: Always
+
+      # DNS 策略
+      dnsPolicy: ClusterFirst
+
+---
+# ConfigMap - 配置文件（可选）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: uav-agent-config
+  namespace: default
+  labels:
+    app: uav-agent
+data:
+  config.yaml: |
+    collection:
+      interval: 10s
+      enableGPS: true
+      enableBattery: true
+      enableFlight: true
+      enableNetwork: true
+      enablePerformance: true
+      enableHealthCheck: true
+      batteryLowThreshold: 30.0
+      batteryCriticalThreshold: 20.0
+      gpsMinSatellites: 4

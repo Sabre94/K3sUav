@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod:*)",
+      "Bash(tree:*)",
+      "Bash(systemctl status:*)",
+      "Bash(kubectl get:*)",
+      "Bash(kubectl version:*)",
+      "Bash(kubectl top:*)",
+      "Bash(kubectl logs:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
