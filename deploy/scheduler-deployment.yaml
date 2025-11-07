@@ -1,0 +1,165 @@
+---
+# ServiceAccount for UAV Scheduler
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: uav-scheduler
+  namespace: default
+  labels:
+    app: uav-scheduler
+
+---
+# ClusterRole - 调度器需要的权限
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: uav-scheduler
+  labels:
+    app: uav-scheduler
+rules:
+  # 读取 Pod
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+  # 绑定 Pod 到节点
+  - apiGroups: [""]
+    resources: ["pods/binding"]
+    verbs: ["create"]
+
+  # 更新 Pod 状态
+  - apiGroups: [""]
+    resources: ["pods/status"]
+    verbs: ["patch", "update"]
+
+  # 读取节点信息
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+
+  # 读取 UAVMetrics CRD
+  - apiGroups: ["uav.k3s.io"]
+    resources: ["uavmetrics"]
+    verbs: ["get", "list", "watch"]
+
+  # 创建 Events（用于记录调度事件）
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+---
+# ClusterRoleBinding - 绑定权限
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: uav-scheduler
+  labels:
+    app: uav-scheduler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: uav-scheduler
+subjects:
+  - kind: ServiceAccount
+    name: uav-scheduler
+    namespace: default
+
+---
+# ConfigMap - 调度器配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: uav-scheduler-config
+  namespace: default
+  labels:
+    app: uav-scheduler
+data:
+  # 调度器配置
+  SCHEDULER_NAME: "uav-scheduler"
+  ALGORITHM_NAME: "composite"  # 可选: distance-based, battery-aware, network-latency, composite
+  NAMESPACE: "default"
+  LOG_LEVEL: "info"
+  STRUCTURED_LOGGING: "false"
+
+  # Distance-based 算法参数
+  TARGET_LATITUDE: "34.0522"   # 目标纬度（洛杉矶）
+  TARGET_LONGITUDE: "-118.2437" # 目标经度
+
+  # Battery-aware 算法参数
+  MIN_BATTERY: "30.0"  # 最低电池百分比
+
+  # Network-latency 算法参数
+  MAX_LATENCY: "200.0"  # 最大延迟（毫秒）
+
+---
+# Deployment - 调度器部署
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: uav-scheduler
+  namespace: default
+  labels:
+    app: uav-scheduler
+    version: v0.1.0
+spec:
+  replicas: 1  # 单副本运行（避免并发调度冲突）
+  selector:
+    matchLabels:
+      app: uav-scheduler
+
+  template:
+    metadata:
+      labels:
+        app: uav-scheduler
+        version: v0.1.0
+
+    spec:
+      serviceAccountName: uav-scheduler
+
+      containers:
+      - name: scheduler
+        image: uav-scheduler:v0.1.0  # 需要构建镜像
+        imagePullPolicy: IfNotPresent
+
+        envFrom:
+        - configMapRef:
+            name: uav-scheduler-config
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+
+        # 健康检查（可选）
+        # livenessProbe:
+        #   httpGet:
+        #     path: /healthz
+        #     port: 8080
+        #   initialDelaySeconds: 30
+        #   periodSeconds: 10
+
+        # 就绪检查
+        # readinessProbe:
+        #   httpGet:
+        #     path: /readyz
+        #     port: 8080
+        #   initialDelaySeconds: 5
+        #   periodSeconds: 5
+
+      restartPolicy: Always
+
+      # 调度到 master 节点（可选）
+      # nodeSelector:
+      #   node-role.kubernetes.io/master: "true"
+
+      # 容忍度（允许在 master 节点运行）
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule

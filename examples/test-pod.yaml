@@ -1,0 +1,30 @@
+# 测试 Pod - 使用 UAV 自定义调度器
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-uav-scheduled-pod
+  namespace: default
+  annotations:
+    # 可选：为此 Pod 指定特定的目标位置
+    # uav.scheduler/target-lat: "34.0522"
+    # uav.scheduler/target-lon: "-118.2437"
+  labels:
+    app: test-pod
+spec:
+  schedulerName: uav-scheduler  # 👈 使用自定义调度器
+
+  containers:
+  - name: nginx
+    image: nginx:alpine
+    ports:
+    - containerPort: 80
+
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+
+  restartPolicy: Always

@@ -1,0 +1,38 @@
+# Multi-stage build for UAV Scheduler
+FROM golang:1.25-alpine AS builder
+
+# 安装构建依赖
+RUN apk add --no-cache git make
+
+# 设置工作目录
+WORKDIR /build
+
+# 复制 go mod 文件
+COPY go.mod go.sum ./
+RUN go mod download
+
+# 复制源代码
+COPY . .
+
+# 编译调度器
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -installsuffix cgo -ldflags '-w -s' -o uav-scheduler ./cmd/scheduler/
+
+# 最终镜像
+FROM alpine:latest
+
+# 安装 CA 证书
+RUN apk --no-cache add ca-certificates
+
+# 创建非 root 用户
+RUN addgroup -S uav && adduser -S uav -G uav
+
+WORKDIR /app
+
+# 从 builder 复制二进制文件
+COPY --from=builder /build/uav-scheduler .
+
+# 使用非 root 用户运行
+USER uav
+
+# 启动命令
+ENTRYPOINT ["/app/uav-scheduler"]
