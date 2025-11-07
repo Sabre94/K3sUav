@@ -9,6 +9,10 @@ SCHEDULER_IMAGE := uav-scheduler
 SCHEDULER_TAG := v0.1.0
 SCHEDULER_FULL_IMAGE := $(SCHEDULER_IMAGE):$(SCHEDULER_TAG)
 
+ROUTER_IMAGE := uav-router
+ROUTER_TAG := v0.1.0
+ROUTER_FULL_IMAGE := $(ROUTER_IMAGE):$(ROUTER_TAG)
+
 # 编译二进制文件
 build:
 	@echo "🔨 编译 UAV Agent..."
@@ -135,6 +139,57 @@ clean-scheduler:
 	@kubectl delete -f deploy/scheduler-deployment.yaml || true
 	@rm -f bin/uav-scheduler
 	@echo "✅ Scheduler 清理完成"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Router Agent 命令
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# 编译 Router
+build-router:
+	@echo "🔨 编译 UAV Router..."
+	@export PATH=$$PATH:/usr/local/go/bin && \
+	go build -o bin/uav-router ./cmd/router/
+	@echo "✅ 编译完成: bin/uav-router"
+
+# 构建 Router 镜像
+build-router-image: build-router
+	@echo "🐳 构建 Router Docker 镜像..."
+	@docker build -f Dockerfile.router -t $(ROUTER_FULL_IMAGE) .
+	@echo "📦 导入镜像到 K3s..."
+	@docker save $(ROUTER_FULL_IMAGE) | sudo k3s ctr images import -
+	@echo "✅ 镜像已就绪: $(ROUTER_FULL_IMAGE)"
+
+# 部署 Router
+deploy-router:
+	@echo "🚀 部署 Router Agent..."
+	@kubectl apply -f deploy/router-daemonset.yaml
+	@echo "✅ Router Agent 已部署"
+
+# 查看 Router 状态
+router-status:
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "  Router Agent Pod 状态"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@kubectl get pods -n uav-system -l app=uav-router -o wide
+
+# 查看 Router 日志
+router-logs:
+	@kubectl logs -n uav-system -l app=uav-router -f --max-log-requests=10
+
+# 测试 Router（本地）
+test-router:
+	@echo "🧪 本地测试 Router..."
+	@export KUBECONFIG=/etc/rancher/k3s/k3s.yaml && \
+	export NODE_NAME=$$(hostname) && \
+	export ALGORITHM=distance-based && \
+	./bin/uav-router
+
+# 清理 Router
+clean-router:
+	@echo "🗑️  清理 Router Agent..."
+	@kubectl delete -f deploy/router-daemonset.yaml || true
+	@rm -f bin/uav-router
+	@echo "✅ Router Agent 清理完成"
 
 # 查看帮助
 help:
