@@ -24,7 +24,8 @@ type Scheduler struct {
 	config        *config.SchedulerConfig
 	k8sClientset  *kubernetes.Clientset
 	uavClient     *k8s.Client
-	algorithm     algorithm.SchedulingAlgorithm
+	algorithm     algorithm.SchedulingAlgorithm // 默认算法
+	algoFactory   *algorithm.AlgorithmFactory   // 算法工厂（用于 Pod 级别算法）
 	log           *logrus.Logger
 }
 
@@ -86,6 +87,7 @@ func NewScheduler(cfg *config.SchedulerConfig, algo algorithm.SchedulingAlgorith
 		k8sClientset: clientset,
 		uavClient:    uavClient,
 		algorithm:    algo,
+		algoFactory:  algorithm.NewAlgorithmFactory(), // 初始化算法工厂
 		log:          log,
 	}, nil
 }
@@ -181,10 +183,23 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 
 	s.log.WithField("nodeCount", len(metrics)).Debug("Fetched UAVMetrics")
 
+	// 1.5 【新增】根据 Pod annotation 选择算法
+	selectedAlgo, err := s.algoFactory.CreateFromPod(pod, s.algorithm)
+	if err != nil {
+		s.log.WithError(err).Warn("Failed to create algorithm from pod annotation, using default")
+		selectedAlgo = s.algorithm
+	}
+
+	// 记录使用的算法
+	s.log.WithFields(logrus.Fields{
+		"pod":       pod.Name,
+		"algorithm": selectedAlgo.Name(),
+	}).Debug("Algorithm selected for pod")
+
 	// 2. 过滤节点
 	filteredMetrics := metrics
-	if s.algorithm.Filter != nil {
-		filteredMetrics, err = s.algorithm.Filter(ctx, pod, metrics)
+	if selectedAlgo.Filter != nil {
+		filteredMetrics, err = selectedAlgo.Filter(ctx, pod, metrics)
 		if err != nil {
 			return fmt.Errorf("filter error: %w", err)
 		}
@@ -195,7 +210,7 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 	}
 
 	// 3. 计算分数
-	scores, err := s.algorithm.Score(ctx, pod, filteredMetrics)
+	scores, err := selectedAlgo.Score(ctx, pod, filteredMetrics)
 	if err != nil {
 		return fmt.Errorf("score error: %w", err)
 	}
@@ -220,7 +235,7 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 
 	s.log.WithFields(logrus.Fields{
 		"pod":       pod.Name,
-		"algorithm": s.algorithm.Name(),
+		"algorithm": selectedAlgo.Name(),
 		"topScores": topScores,
 	}).Debug("Scoring completed")
 

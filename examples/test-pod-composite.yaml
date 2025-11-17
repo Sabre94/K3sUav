@@ -1,0 +1,37 @@
+---
+# 示例 3: 使用 composite 组合算法的 Pod
+# 这个 Pod 会综合考虑距离和电池两个因素
+apiVersion: v1
+kind: Pod
+metadata:
+  name: balanced-app
+  namespace: default
+  annotations:
+    # 指定使用组合算法
+    uav.scheduler/algorithm: "composite"
+
+    # 距离算法参数：目标位置
+    uav.scheduler/target-lat: "34.0522"
+    uav.scheduler/target-lon: "-118.2437"
+
+    # 电池算法参数：最低电池要求
+    uav.scheduler/min-battery: "40.0"
+
+    # 组合权重：70% 距离 + 30% 电池
+    uav.scheduler/composite-weights: "0.7,0.3"
+spec:
+  # 使用 UAV 自定义调度器
+  schedulerName: uav-scheduler
+
+  containers:
+  - name: app
+    image: nginx:latest
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  restartPolicy: Always

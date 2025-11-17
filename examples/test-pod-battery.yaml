@@ -1,0 +1,31 @@
+---
+# 示例 2: 使用 battery-aware 算法的 Pod
+# 这个 Pod 会被调度到电池电量最充足的节点（至少 70%）
+apiVersion: v1
+kind: Pod
+metadata:
+  name: long-running-task
+  namespace: default
+  annotations:
+    # 指定使用基于电池的调度算法
+    uav.scheduler/algorithm: "battery-aware"
+
+    # 要求节点电池至少 70%
+    uav.scheduler/min-battery: "70.0"
+spec:
+  # 使用 UAV 自定义调度器
+  schedulerName: uav-scheduler
+
+  containers:
+  - name: task
+    image: busybox:latest
+    command: ["sleep", "3600"]
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+  restartPolicy: Always

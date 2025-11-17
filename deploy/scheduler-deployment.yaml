@@ -118,7 +118,7 @@ spec:
 
       containers:
       - name: scheduler
-        image: uav-scheduler:v0.1.0  # 需要构建镜像
+        image: x1224403599/uav-scheduler:v0.2.0
         imagePullPolicy: IfNotPresent
 
         envFrom:

@@ -1,0 +1,31 @@
+---
+# 示例 1: 使用 distance-based 算法的 Pod
+# 这个 Pod 会被调度到距离目标位置最近的节点
+apiVersion: v1
+kind: Pod
+metadata:
+  name: video-processor
+  namespace: default
+  annotations:
+    # 指定使用基于距离的调度算法
+    uav.scheduler/algorithm: "distance-based"
+
+    # 目标位置：洛杉矶市中心
+    uav.scheduler/target-lat: "34.0522"
+    uav.scheduler/target-lon: "-118.2437"
+spec:
+  # 使用 UAV 自定义调度器
+  schedulerName: uav-scheduler
+
+  containers:
+  - name: processor
+    image: nginx:latest
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  restartPolicy: Always

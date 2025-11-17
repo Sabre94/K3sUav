@@ -1,0 +1,25 @@
+---
+# 示例 5: 不指定算法的 Pod（使用调度器默认算法）
+# 这个 Pod 会使用调度器启动时配置的默认算法
+apiVersion: v1
+kind: Pod
+metadata:
+  name: default-app
+  namespace: default
+  # 注意：没有 uav.scheduler/algorithm annotation
+spec:
+  # 使用 UAV 自定义调度器
+  schedulerName: uav-scheduler
+
+  containers:
+  - name: app
+    image: nginx:latest
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  restartPolicy: Always
