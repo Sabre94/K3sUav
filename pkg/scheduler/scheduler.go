@@ -196,7 +196,18 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 		"algorithm": selectedAlgo.Name(),
 	}).Debug("Algorithm selected for pod")
 
-	// 2. 过滤节点
+	// 2. 【coverage-based 特殊处理】如果是覆盖率算法，加锁确保串行调度（贪心算法）
+	var coverageAlgo *algorithm.CoverageBasedAlgorithm
+	if selectedAlgo.Name() == "coverage-based" {
+		if ca, ok := selectedAlgo.(*algorithm.CoverageBasedAlgorithm); ok {
+			coverageAlgo = ca
+			// 加锁：确保同一个 Deployment 的多个 Pod 串行调度
+			coverageAlgo.LockDeployment(getDeploymentName(pod))
+			defer coverageAlgo.UnlockDeployment(getDeploymentName(pod))
+		}
+	}
+
+	// 3. 过滤节点
 	filteredMetrics := metrics
 	if selectedAlgo.Filter != nil {
 		filteredMetrics, err = selectedAlgo.Filter(ctx, pod, metrics)
@@ -209,7 +220,7 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 		s.log.WithField("filteredCount", len(filteredMetrics)).Debug("Nodes filtered")
 	}
 
-	// 3. 计算分数
+	// 4. 计算分数
 	scores, err := selectedAlgo.Score(ctx, pod, filteredMetrics)
 	if err != nil {
 		return fmt.Errorf("score error: %w", err)
@@ -219,7 +230,7 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 		return fmt.Errorf("no scores returned")
 	}
 
-	// 4. 排序并选择最佳节点
+	// 5. 排序并选择最佳节点
 	sort.Slice(scores, func(i, j int) bool {
 		return scores[i].Score > scores[j].Score
 	})
@@ -239,9 +250,22 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 		"topScores": topScores,
 	}).Debug("Scoring completed")
 
-	// 5. 绑定 Pod 到节点
+	// 6. 绑定 Pod 到节点
 	if err := s.bindPodToNode(ctx, pod, bestNode); err != nil {
 		return fmt.Errorf("bind error: %w", err)
+	}
+
+	// 7. 【贪心算法关键】绑定成功后，记录到 coverage-based 算法的缓存
+	if coverageAlgo != nil {
+		// 增量覆盖 = 分数 / 100
+		incrementalCoverage := bestScore / 100.0
+		coverageAlgo.RecordBinding(pod, bestNode, incrementalCoverage)
+
+		s.log.WithFields(logrus.Fields{
+			"pod":  pod.Name,
+			"node": bestNode,
+			"incrementalCoverage": fmt.Sprintf("%.2f%%", incrementalCoverage),
+		}).Debug("Recorded coverage binding")
 	}
 
 	duration := time.Since(startTime)
@@ -256,6 +280,16 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 	}).Info("Pod scheduled successfully")
 
 	return nil
+}
+
+// getDeploymentName 从 Pod 的 Owner References 获取 Deployment 名称
+func getDeploymentName(pod *v1.Pod) string {
+	for _, owner := range pod.OwnerReferences {
+		if owner.Kind == "ReplicaSet" {
+			return owner.Name
+		}
+	}
+	return pod.Name
 }
 
 // bindPodToNode 绑定 Pod 到节点

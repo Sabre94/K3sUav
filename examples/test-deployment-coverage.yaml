@@ -1,0 +1,54 @@
+---
+# Coverage-based 算法测试 Deployment
+# 该 Deployment 会创建 4 个 Pod，调度器会将它们调度到不同的节点以实现最大覆盖
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sensor-network
+  namespace: default
+  labels:
+    app: sensor-network
+  annotations:
+    # 使用覆盖率算法
+    uav.scheduler/algorithm: "coverage-based"
+
+    # 覆盖率要求 90%
+    uav.scheduler/coverage-requirement: "90"
+
+    # 每个节点覆盖半径 5km
+    uav.scheduler/coverage-radius: "5.0"
+spec:
+  # 创建 4 个 Pod 副本
+  replicas: 4
+
+  selector:
+    matchLabels:
+      app: sensor-network
+
+  template:
+    metadata:
+      labels:
+        app: sensor-network
+      annotations:
+        # Pod 级别的算法配置（会被调度器读取）
+        uav.scheduler/algorithm: "coverage-based"
+        uav.scheduler/coverage-requirement: "90"
+        uav.scheduler/coverage-radius: "5.0"
+    spec:
+      # 使用 UAV 自定义调度器
+      schedulerName: uav-scheduler
+
+      containers:
+      - name: sensor
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+
+      restartPolicy: Always

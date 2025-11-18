@@ -3,17 +3,24 @@ package algorithm
 import (
 	"fmt"
 	"strconv"
+	"sync"
 
 	v1 "k8s.io/api/core/v1"
 )
 
 // AlgorithmFactory 算法工厂
 // 根据 Pod 的 annotation 动态创建算法实例
-type AlgorithmFactory struct{}
+type AlgorithmFactory struct {
+	// coverage-based 算法的单例缓存（key: "coverage-<requirement>-<radius>"）
+	coverageAlgos map[string]*CoverageBasedAlgorithm
+	mu            sync.RWMutex
+}
 
 // NewAlgorithmFactory 创建算法工厂
 func NewAlgorithmFactory() *AlgorithmFactory {
-	return &AlgorithmFactory{}
+	return &AlgorithmFactory{
+		coverageAlgos: make(map[string]*CoverageBasedAlgorithm),
+	}
 }
 
 // CreateFromPod 从 Pod annotation 创建算法实例
@@ -49,6 +56,9 @@ func (f *AlgorithmFactory) CreateFromPod(pod *v1.Pod, defaultAlgo SchedulingAlgo
 
 	case "composite":
 		return f.createComposite(pod)
+
+	case "coverage-based":
+		return f.createCoverageBased(pod)
 
 	default:
 		return nil, fmt.Errorf("unsupported algorithm '%s' in pod annotation", algoName)
@@ -109,6 +119,41 @@ func (f *AlgorithmFactory) createComposite(pod *v1.Pod) (SchedulingAlgorithm, er
 		[]SchedulingAlgorithm{distanceAlgo, batteryAlgo},
 		weights,
 	), nil
+}
+
+// createCoverageBased 创建基于覆盖率的算法（单例模式）
+func (f *AlgorithmFactory) createCoverageBased(pod *v1.Pod) (SchedulingAlgorithm, error) {
+	// 读取覆盖率要求
+	coverageRequirement := getFloatAnnotation(pod, "uav.scheduler/coverage-requirement", 90.0)
+
+	// 读取覆盖半径
+	coverageRadius := getFloatAnnotation(pod, "uav.scheduler/coverage-radius", 5.0)
+
+	// 生成缓存 key（相同配置的 Deployment 共享同一个算法实例）
+	key := fmt.Sprintf("coverage-%.1f-%.1f", coverageRequirement, coverageRadius)
+
+	// 检查是否已存在算法实例（读锁）
+	f.mu.RLock()
+	algo, exists := f.coverageAlgos[key]
+	f.mu.RUnlock()
+
+	if exists {
+		return algo, nil // 复用已有实例
+	}
+
+	// 创建新实例（写锁）
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Double-check（避免并发创建）
+	if algo, exists := f.coverageAlgos[key]; exists {
+		return algo, nil
+	}
+
+	// 创建并缓存
+	algo = NewCoverageBasedAlgorithm(coverageRequirement, coverageRadius)
+	f.coverageAlgos[key] = algo
+	return algo, nil
 }
 
 // 辅助函数：从 annotation 读取 float64 值

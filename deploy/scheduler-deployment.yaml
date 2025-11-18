@@ -118,8 +118,8 @@ spec:
 
       containers:
       - name: scheduler
-        image: x1224403599/uav-scheduler:v0.2.0
-        imagePullPolicy: IfNotPresent
+        image: x1224403599/uav-scheduler:v0.3.3-singleton
+        imagePullPolicy: Always
 
         envFrom:
         - configMapRef:
