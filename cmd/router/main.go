@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
@@ -11,6 +12,8 @@ import (
 	"github.com/k3suav/uav-monitor/pkg/k8s"
 	"github.com/k3suav/uav-monitor/pkg/router"
 	"github.com/k3suav/uav-monitor/pkg/router/algorithm"
+	"github.com/k3suav/uav-monitor/pkg/router/istio"
+	versionedclient "istio.io/client-go/pkg/clientset/versioned"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -87,6 +90,44 @@ func main() {
 		log.WithError(err).Fatal("Failed to start router agent")
 	}
 
+	// 启动 Istio 集成（如果启用）
+	istioEnabled := getEnvBool("ENABLE_ISTIO", true) // 默认启用
+	if istioEnabled {
+		log.Info("Initializing Istio integration")
+
+		// 创建 Istio 客户端
+		istioClient, err := versionedclient.NewForConfig(k8sConfig)
+		if err != nil {
+			log.WithError(err).Warn("Failed to create Istio client, Istio integration disabled")
+		} else {
+			// 配置 Reconciler 选项
+			reconcileOptions := &istio.ReconcileOptions{
+				Enabled:                istioEnabled,
+				MinWeightThreshold:     getEnvInt("ISTIO_MIN_WEIGHT", 10),
+				MinWeightChangePercent: getEnvFloat("ISTIO_MIN_CHANGE_PERCENT", 5.0),
+				EnableAnnotations:      getEnvBool("ISTIO_ENABLE_ANNOTATIONS", true),
+				NamePrefix:             getEnvString("ISTIO_NAME_PREFIX", "uav-"),
+			}
+
+			// 创建并启动 Reconciler
+			reconciler := istio.NewReconciler(
+				routerAgent,
+				istioClient,
+				k8sClientset,
+				reconcileOptions,
+				log,
+			)
+
+			if err := reconciler.Start(ctx); err != nil {
+				log.WithError(err).Warn("Failed to start Istio reconciler")
+			} else {
+				log.Info("Istio integration started successfully")
+			}
+		}
+	} else {
+		log.Info("Istio integration is disabled")
+	}
+
 	// 启动 HTTP API 服务器
 	server := router.NewServer(routerAgent, apiPort, log)
 	go func() {
@@ -102,6 +143,44 @@ func main() {
 
 	log.Info("Shutting down router agent")
 	cancel()
+}
+
+// getEnvBool 获取布尔类型环境变量
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if b, err := strconv.ParseBool(value); err == nil {
+			return b
+		}
+	}
+	return defaultValue
+}
+
+// getEnvInt 获取整数类型环境变量
+func getEnvInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if i, err := strconv.Atoi(value); err == nil {
+			return i
+		}
+	}
+	return defaultValue
+}
+
+// getEnvFloat 获取浮点类型环境变量
+func getEnvFloat(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			return f
+		}
+	}
+	return defaultValue
+}
+
+// getEnvString 获取字符串类型环境变量
+func getEnvString(key string, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }
 
 // getK8sConfig 获取 Kubernetes 配置

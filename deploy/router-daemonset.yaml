@@ -39,6 +39,11 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list"]
+
+  # Istio DestinationRule 权限
+  - apiGroups: ["networking.istio.io"]
+    resources: ["destinationrules"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -73,7 +78,7 @@ spec:
       hostNetwork: true  # 使用宿主机网络，便于与 Ztunnel 通信
       containers:
         - name: router
-          image: x1224403599/uav-router:v0.1.0
+          image: x1224403599/uav-router:v0.2.0-istio
           imagePullPolicy: IfNotPresent
           env:
             # 节点名称（从 downward API 获取）
@@ -89,6 +94,26 @@ spec:
             # API 端口
             - name: API_PORT
               value: "8080"
+
+            # Istio 集成配置
+            - name: ENABLE_ISTIO
+              value: "true"
+
+            # Istio 最小权重阈值（权重低于此值的端点将被过滤）
+            - name: ISTIO_MIN_WEIGHT
+              value: "10"
+
+            # Istio 权重变化百分比阈值（变化超过此值才触发更新）
+            - name: ISTIO_MIN_CHANGE_PERCENT
+              value: "5.0"
+
+            # Istio 启用调试注释
+            - name: ISTIO_ENABLE_ANNOTATIONS
+              value: "true"
+
+            # Istio DestinationRule 名称前缀
+            - name: ISTIO_NAME_PREFIX
+              value: "uav-"
 
           ports:
             - name: http

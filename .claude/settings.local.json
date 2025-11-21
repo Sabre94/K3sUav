@@ -12,7 +12,9 @@
       "Bash(go build:*)",
       "Bash(go mod tidy:*)",
       "Bash(curl:*)",
-      "Bash(ISTIO_VERSION=1.24.0 sh -)"
+      "Bash(ISTIO_VERSION=1.24.0 sh -)",
+      "Bash(go version:*)",
+      "Bash(docker:*)"
     ],
     "deny": [],
     "ask": []
