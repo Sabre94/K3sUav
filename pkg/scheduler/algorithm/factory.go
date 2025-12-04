@@ -1,10 +1,13 @@
 package algorithm
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"sync"
 
+	"github.com/k3suav/uav-monitor/pkg/models"
+	"github.com/k3suav/uav-monitor/pkg/scheduler/algorithm/greed_nsgaii"
 	v1 "k8s.io/api/core/v1"
 )
 
@@ -13,24 +16,30 @@ import (
 type AlgorithmFactory struct {
 	// coverage-based 算法的单例缓存（key: "coverage-<requirement>-<radius>"）
 	coverageAlgos map[string]*CoverageBasedAlgorithm
-	mu            sync.RWMutex
+	// greed-nsgaii 算法的单例缓存（key: "greed-<tasktype>-<coverage>-<radius>"）
+	greedNSGAIIAlgos map[string]*greed_nsgaii.GreedNSGAIIAlgorithm
+	mu               sync.RWMutex
 }
 
 // NewAlgorithmFactory 创建算法工厂
 func NewAlgorithmFactory() *AlgorithmFactory {
 	return &AlgorithmFactory{
-		coverageAlgos: make(map[string]*CoverageBasedAlgorithm),
+		coverageAlgos:    make(map[string]*CoverageBasedAlgorithm),
+		greedNSGAIIAlgos: make(map[string]*greed_nsgaii.GreedNSGAIIAlgorithm),
 	}
 }
 
 // CreateFromPod 从 Pod annotation 创建算法实例
 // 支持的 annotations:
-//   - uav.scheduler/algorithm: 算法名称 (distance-based, battery-aware, network-latency, composite)
+//   - uav.scheduler/algorithm: 算法名称 (distance-based, battery-aware, network-latency, composite, coverage-based, greed-nsgaii)
 //   - uav.scheduler/target-lat: 目标纬度 (distance-based)
 //   - uav.scheduler/target-lon: 目标经度 (distance-based)
 //   - uav.scheduler/min-battery: 最低电池百分比 (battery-aware)
 //   - uav.scheduler/max-latency: 最大延迟毫秒 (network-latency)
 //   - uav.scheduler/composite-weights: 组合算法权重，格式: "0.6,0.4" (composite)
+//   - uav.scheduler/task-type: 任务类型 (greed-nsgaii): emergency, sustain, compute, default
+//   - uav.scheduler/target-coverage: 目标覆盖率 (greed-nsgaii): 0.0-1.0
+//   - uav.scheduler/coverage-radius: 覆盖半径（米）(greed-nsgaii)
 func (f *AlgorithmFactory) CreateFromPod(pod *v1.Pod, defaultAlgo SchedulingAlgorithm) (SchedulingAlgorithm, error) {
 	if pod.Annotations == nil {
 		return defaultAlgo, nil
@@ -59,6 +68,9 @@ func (f *AlgorithmFactory) CreateFromPod(pod *v1.Pod, defaultAlgo SchedulingAlgo
 
 	case "coverage-based":
 		return f.createCoverageBased(pod)
+
+	case "greed-nsgaii":
+		return f.createGreedNSGAII(pod)
 
 	default:
 		return nil, fmt.Errorf("unsupported algorithm '%s' in pod annotation", algoName)
@@ -188,4 +200,98 @@ func parseWeights(weightsStr string) ([]float64, error) {
 
 	weights = append(weights, w1, w2)
 	return weights, nil
+}
+
+// createGreedNSGAII 创建 GREED + NSGA-II 算法（单例模式）
+func (f *AlgorithmFactory) createGreedNSGAII(pod *v1.Pod) (SchedulingAlgorithm, error) {
+	// 读取任务类型
+	taskTypeStr := pod.Annotations["uav.scheduler/task-type"]
+	if taskTypeStr == "" {
+		taskTypeStr = "default"
+	}
+
+	var taskType greed_nsgaii.TaskType
+	switch taskTypeStr {
+	case "emergency":
+		taskType = greed_nsgaii.TaskTypeEmergency
+	case "sustain":
+		taskType = greed_nsgaii.TaskTypeSustain
+	case "compute":
+		taskType = greed_nsgaii.TaskTypeCompute
+	default:
+		taskType = greed_nsgaii.TaskTypeDefault
+	}
+
+	// 读取目标覆盖率（0.0 - 1.0）
+	targetCoverage := getFloatAnnotation(pod, "uav.scheduler/target-coverage", 0.9)
+	if targetCoverage < 0 {
+		targetCoverage = 0
+	}
+	if targetCoverage > 1.0 {
+		targetCoverage = 1.0
+	}
+
+	// 读取覆盖半径（米）
+	coverageRadius := getFloatAnnotation(pod, "uav.scheduler/coverage-radius", 200.0)
+
+	// 生成缓存 key（相同配置的 Deployment 共享同一个算法实例）
+	key := fmt.Sprintf("greed-%s-%.2f-%.1f", taskTypeStr, targetCoverage, coverageRadius)
+
+	// 检查是否已存在算法实例（读锁）
+	f.mu.RLock()
+	algo, exists := f.greedNSGAIIAlgos[key]
+	f.mu.RUnlock()
+
+	if exists {
+		return &greedNSGAIIAdapter{algo: algo}, nil // 复用已有实例
+	}
+
+	// 创建新实例（写锁）
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Double-check（避免并发创建）
+	if algo, exists := f.greedNSGAIIAlgos[key]; exists {
+		return &greedNSGAIIAdapter{algo: algo}, nil
+	}
+
+	// 创建并缓存
+	algo = greed_nsgaii.NewGreedNSGAIIAlgorithm(taskType, targetCoverage, coverageRadius)
+	f.greedNSGAIIAlgos[key] = algo
+
+	// 返回适配器包装
+	return &greedNSGAIIAdapter{algo: algo}, nil
+}
+
+// greedNSGAIIAdapter 适配器，用于将 greed_nsgaii.GreedNSGAIIAlgorithm 适配到 SchedulingAlgorithm 接口
+type greedNSGAIIAdapter struct {
+	algo *greed_nsgaii.GreedNSGAIIAlgorithm
+}
+
+func (a *greedNSGAIIAdapter) Name() string {
+	return a.algo.Name()
+}
+
+func (a *greedNSGAIIAdapter) Filter(ctx context.Context, pod *v1.Pod, metrics []*models.UAVMetrics) ([]*models.UAVMetrics, error) {
+	return a.algo.Filter(ctx, pod, metrics)
+}
+
+func (a *greedNSGAIIAdapter) Score(ctx context.Context, pod *v1.Pod, metrics []*models.UAVMetrics) ([]NodeScore, error) {
+	// 调用底层算法的 Score 方法
+	scores, err := a.algo.Score(ctx, pod, metrics)
+	if err != nil {
+		return nil, err
+	}
+
+	// 转换类型
+	result := make([]NodeScore, len(scores))
+	for i, s := range scores {
+		result[i] = NodeScore{
+			NodeName: s.NodeName,
+			Score:    s.Score,
+			Reason:   s.Reason,
+		}
+	}
+
+	return result, nil
 }
