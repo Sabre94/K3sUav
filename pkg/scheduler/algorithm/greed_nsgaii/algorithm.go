@@ -10,7 +10,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 )
 
-// NodeScore 节点评分结果（避免循环导入，本地定义）
+// NodeScore 节点评分结果（本地定义，避免循环导入）
 type NodeScore struct {
 	NodeName string  // 节点名称
 	Score    float64 // 分数 (0-100)
@@ -203,6 +203,15 @@ func (a *GreedNSGAIIAlgorithm) RecordBinding(pod *v1.Pod, nodeName string, allMe
 
 // RunNSGA2Optimization 运行 NSGA-II 优化（可选，用于离线优化或实验）
 func (a *GreedNSGAIIAlgorithm) RunNSGA2Optimization(allMetrics []*models.UAVMetrics) *NSGA2Result {
+	if len(allMetrics) == 0 {
+		return &NSGA2Result{}
+	}
+
+	// 初始化 GPS 转换器（使用第一个节点作为基准点）
+	a.converterMu.Do(func() {
+		a.gpsConverter = NewGPSConverter(allMetrics[0].GPS.Latitude, allMetrics[0].GPS.Longitude)
+	})
+
 	// 转换节点信息
 	scorer := NewNodeScorer(a.taskType)
 	allNodes := a.convertMetricsToNodeInfo(allMetrics, scorer)

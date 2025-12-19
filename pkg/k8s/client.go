@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -20,6 +21,7 @@ import (
 // Client is a Kubernetes client wrapper for UAV CRD operations
 type Client struct {
 	dynamicClient dynamic.Interface
+	clientset     *kubernetes.Clientset
 	config        *config.Config
 	gvr           schema.GroupVersionResource
 }
@@ -53,6 +55,12 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
 
+	// Create standard kubernetes clientset
+	clientset, err := kubernetes.NewForConfig(k8sConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create kubernetes clientset: %w", err)
+	}
+
 	// Define GVR (GroupVersionResource)
 	gvr := schema.GroupVersionResource{
 		Group:    cfg.Kubernetes.CRDGroup,
@@ -62,9 +70,15 @@ func NewClient(cfg *config.Config) (*Client, error) {
 
 	return &Client{
 		dynamicClient: dynamicClient,
+		clientset:     clientset,
 		config:        cfg,
 		gvr:           gvr,
 	}, nil
+}
+
+// Clientset returns the kubernetes clientset
+func (c *Client) Clientset() *kubernetes.Clientset {
+	return c.clientset
 }
 
 // CreateOrUpdateUAVMetrics creates or updates a UAVMetrics CRD

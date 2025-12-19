@@ -29,6 +29,28 @@ type SchedulerConfig struct {
 	// 日志配置
 	LogLevel          string
 	StructuredLogging bool
+
+	// 自适应调度配置
+	EnableAdaptiveScheduling bool            // 是否启用自适应调度
+	AdaptiveParams           AdaptiveParams  // 自适应调度参数
+}
+
+// AdaptiveParams 自适应调度参数
+type AdaptiveParams struct {
+	// 覆盖率阈值
+	TargetCoverage     float64 // 目标覆盖率 (0.9 = 90%)
+	MinCoverage        float64 // 最低可接受覆盖率 (0.7 = 70%)
+
+	// 变化阈值
+	MinorDropThreshold float64 // 小幅下降阈值 (0.1 = 10%)
+	MajorDropThreshold float64 // 大幅下降阈值 (0.3 = 30%)
+
+	// 算法配置
+	CoverageRadius     float64 // 覆盖半径（米）
+	TaskType           string  // 任务类型: default, emergency, sustain, compute
+
+	// 执行配置
+	AutoExecute        bool    // 是否自动执行调度动作
 }
 
 // AlgorithmParams 算法参数
@@ -65,6 +87,17 @@ func DefaultConfig() *SchedulerConfig {
 			TargetLongitude: getEnvFloatOrDefault("TARGET_LONGITUDE", -118.2437),
 			MinBattery:      getEnvFloatOrDefault("MIN_BATTERY", 30.0),
 			MaxLatency:      getEnvFloatOrDefault("MAX_LATENCY", 200.0),
+		},
+		// 自适应调度配置
+		EnableAdaptiveScheduling: getEnvBoolOrDefault("ENABLE_ADAPTIVE_SCHEDULING", false),
+		AdaptiveParams: AdaptiveParams{
+			TargetCoverage:     getEnvFloatOrDefault("ADAPTIVE_TARGET_COVERAGE", 0.90),
+			MinCoverage:        getEnvFloatOrDefault("ADAPTIVE_MIN_COVERAGE", 0.70),
+			MinorDropThreshold: getEnvFloatOrDefault("ADAPTIVE_MINOR_DROP", 0.10),
+			MajorDropThreshold: getEnvFloatOrDefault("ADAPTIVE_MAJOR_DROP", 0.30),
+			CoverageRadius:     getEnvFloatOrDefault("ADAPTIVE_COVERAGE_RADIUS", 500.0),
+			TaskType:           getEnvOrDefault("ADAPTIVE_TASK_TYPE", "default"),
+			AutoExecute:        getEnvBoolOrDefault("ADAPTIVE_AUTO_EXECUTE", true),
 		},
 	}
 }

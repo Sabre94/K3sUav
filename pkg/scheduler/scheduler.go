@@ -27,6 +27,9 @@ type Scheduler struct {
 	algorithm     algorithm.SchedulingAlgorithm // 默认算法
 	algoFactory   *algorithm.AlgorithmFactory   // 算法工厂（用于 Pod 级别算法）
 	log           *logrus.Logger
+
+	// 自适应调度集成（仅用于覆盖率算法）
+	adaptiveIntegration *AdaptiveSchedulerIntegration
 }
 
 // NewScheduler 创建新的调度器
@@ -90,6 +93,12 @@ func NewScheduler(cfg *config.SchedulerConfig, algo algorithm.SchedulingAlgorith
 		algoFactory:  algorithm.NewAlgorithmFactory(), // 初始化算法工厂
 		log:          log,
 	}, nil
+}
+
+// SetAdaptiveIntegration 设置自适应调度集成（仅用于覆盖率算法）
+func (s *Scheduler) SetAdaptiveIntegration(integration *AdaptiveSchedulerIntegration) {
+	s.adaptiveIntegration = integration
+	s.log.Info("Adaptive scheduler integration configured (for coverage algorithms only)")
 }
 
 // Run 启动调度器
@@ -268,6 +277,28 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 		}).Debug("Recorded coverage binding")
 	}
 
+	// 8. 【自适应调度】只为覆盖率算法注册监控
+	if s.adaptiveIntegration != nil && NeedsCoverageMonitor(selectedAlgo.Name()) {
+		deploymentName := getDeploymentName(pod)
+
+		// 检查是否已注册，如果没有则注册
+		state := s.adaptiveIntegration.GetDeploymentState(deploymentName)
+		if state == nil {
+			// 首次调度，注册 Deployment
+			if err := s.adaptiveIntegration.RegisterDeployment(deploymentName, pod.Namespace, []string{bestNode}); err != nil {
+				s.log.WithError(err).Warn("Failed to register deployment for coverage monitoring")
+			} else {
+				s.log.WithFields(logrus.Fields{
+					"deployment": deploymentName,
+					"algorithm":  selectedAlgo.Name(),
+				}).Info("Deployment registered for coverage monitoring")
+			}
+		}
+
+		// 记录 Pod 绑定
+		s.adaptiveIntegration.RecordPodBinding(deploymentName, pod.Name, bestNode)
+	}
+
 	duration := time.Since(startTime)
 
 	s.log.WithFields(logrus.Fields{
@@ -277,6 +308,7 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 		"score":     fmt.Sprintf("%.2f", bestScore),
 		"reason":    scores[0].Reason,
 		"duration":  duration.Milliseconds(),
+		"algorithm": selectedAlgo.Name(),
 	}).Info("Pod scheduled successfully")
 
 	return nil

@@ -250,7 +250,7 @@ func (opt *NSGA2Optimizer) repairChromosome(chromosome []bool) []bool {
 
 		// 找出增益最大的未选择节点
 		bestIdx := -1
-		bestGain := -1.0
+		bestGain := -math.MaxFloat64 // 使用最小值，确保能选中节点
 
 		for _, idx := range unselectedIndices {
 			node := opt.allNodes[idx]
@@ -263,11 +263,18 @@ func (opt *NSGA2Optimizer) repairChromosome(chromosome []bool) []bool {
 			}
 		}
 
-		if bestIdx == -1 || bestGain <= 0 {
+		// 如果没找到（不应该发生），选择第一个未选中的节点
+		if bestIdx == -1 && len(unselectedIndices) > 0 {
+			bestIdx = unselectedIndices[0]
+		}
+
+		// 如果没有找到节点，退出（但这不应该发生，因为还有unselectedIndices）
+		if bestIdx == -1 {
 			break
 		}
 
-		// 选择该节点
+		// 即使增益为0或负数，也要继续添加节点以满足覆盖率约束
+		// 覆盖率是硬约束，必须满足
 		repairedChromosome[bestIdx] = true
 
 		// 从未选择列表中移除

@@ -5,18 +5,20 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/k3suav/uav-monitor/pkg/config"
 	"github.com/k3suav/uav-monitor/pkg/k8s"
 	"github.com/k3suav/uav-monitor/pkg/scheduler"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/algorithm"
+	"github.com/k3suav/uav-monitor/pkg/scheduler/algorithm/greed_nsgaii"
 	schedulerConfig "github.com/k3suav/uav-monitor/pkg/scheduler/config"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/registry"
 	"github.com/sirupsen/logrus"
 )
 
 const (
-	version = "v0.1.0"
+	version = "v0.2.0"  // 升级版本：加入自适应调度
 )
 
 var log = logrus.New()
@@ -75,13 +77,48 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// 7. 启动调度器
+	// 7. 创建自适应调度集成（可选，根据配置启用）
+	var adaptiveIntegration *scheduler.AdaptiveSchedulerIntegration
+	if cfg.EnableAdaptiveScheduling {
+		adaptiveConfig := &scheduler.AdaptiveIntegrationConfig{
+			MonitorInterval:       30 * time.Second,
+			NodeTimeoutDuration:   60 * time.Second,
+			TargetCoverageRatio:   cfg.AdaptiveParams.TargetCoverage,
+			MinCoverageRatio:      cfg.AdaptiveParams.MinCoverage,
+			MinorDropThreshold:    cfg.AdaptiveParams.MinorDropThreshold,
+			MajorDropThreshold:    cfg.AdaptiveParams.MajorDropThreshold,
+			CoverageRadius:        cfg.AdaptiveParams.CoverageRadius,
+			GridDensity:           50,
+			TaskType:              greed_nsgaii.TaskType(cfg.AdaptiveParams.TaskType),
+			AutoExecute:           cfg.AdaptiveParams.AutoExecute,
+			MinReplanInterval:     5 * time.Minute,
+			MinGreedyInterval:     1 * time.Minute,
+		}
+
+		adaptiveIntegration = scheduler.NewAdaptiveSchedulerIntegration(
+			uavClient.Clientset(),
+			uavClient,
+			cfg.Namespace,
+			adaptiveConfig,
+		)
+
+		if err := adaptiveIntegration.Start(); err != nil {
+			log.WithError(err).Error("Failed to start adaptive scheduler integration")
+		} else {
+			log.Info("Adaptive scheduler integration started")
+		}
+
+		// 将自适应集成传递给主调度器
+		sched.SetAdaptiveIntegration(adaptiveIntegration)
+	}
+
+	// 8. 启动调度器
 	errChan := make(chan error, 1)
 	go func() {
 		errChan <- sched.Run(ctx)
 	}()
 
-	// 8. 等待信号或错误
+	// 9. 等待信号或错误
 	select {
 	case sig := <-sigChan:
 		log.WithField("signal", sig).Info("Received shutdown signal")
@@ -91,6 +128,11 @@ func main() {
 			log.WithError(err).Error("Scheduler error")
 		}
 		cancel()
+	}
+
+	// 10. 优雅关闭
+	if adaptiveIntegration != nil {
+		adaptiveIntegration.Stop()
 	}
 
 	log.Info("Scheduler stopped")
@@ -123,6 +165,23 @@ func registerBuiltinAlgorithms(cfg *schedulerConfig.SchedulerConfig) {
 	)
 	registry.Register(compositeAlgo)
 	log.Debugf("Registered algorithm: %s", compositeAlgo.Name())
+
+	// 5. Coverage-based 算法（贪心覆盖率优化）
+	coverageAlgo := algorithm.NewCoverageBasedAlgorithm(
+		cfg.AdaptiveParams.TargetCoverage,
+		cfg.AdaptiveParams.CoverageRadius,
+	)
+	registry.Register(coverageAlgo)
+	log.Debugf("Registered algorithm: %s", coverageAlgo.Name())
+
+	// 6. GREED-NSGAII 算法（贪心 + NSGA-II 多目标优化）
+	greedNsgaiiAlgo := algorithm.NewGreedNSGAIIAdapter(
+		greed_nsgaii.TaskType(cfg.AdaptiveParams.TaskType),
+		cfg.AdaptiveParams.TargetCoverage,
+		cfg.AdaptiveParams.CoverageRadius,
+	)
+	registry.Register(greedNsgaiiAlgo)
+	log.Debugf("Registered algorithm: %s", greedNsgaiiAlgo.Name())
 
 	log.WithField("algorithms", registry.List()).Info("Built-in algorithms registered")
 }

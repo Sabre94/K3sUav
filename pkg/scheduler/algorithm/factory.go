@@ -243,7 +243,7 @@ func (f *AlgorithmFactory) createGreedNSGAII(pod *v1.Pod) (SchedulingAlgorithm, 
 	f.mu.RUnlock()
 
 	if exists {
-		return &greedNSGAIIAdapter{algo: algo}, nil // 复用已有实例
+		return &GreedNSGAIIAdapter{algo: algo}, nil // 复用已有实例
 	}
 
 	// 创建新实例（写锁）
@@ -252,7 +252,7 @@ func (f *AlgorithmFactory) createGreedNSGAII(pod *v1.Pod) (SchedulingAlgorithm, 
 
 	// Double-check（避免并发创建）
 	if algo, exists := f.greedNSGAIIAlgos[key]; exists {
-		return &greedNSGAIIAdapter{algo: algo}, nil
+		return &GreedNSGAIIAdapter{algo: algo}, nil
 	}
 
 	// 创建并缓存
@@ -260,23 +260,29 @@ func (f *AlgorithmFactory) createGreedNSGAII(pod *v1.Pod) (SchedulingAlgorithm, 
 	f.greedNSGAIIAlgos[key] = algo
 
 	// 返回适配器包装
-	return &greedNSGAIIAdapter{algo: algo}, nil
+	return &GreedNSGAIIAdapter{algo: algo}, nil
 }
 
-// greedNSGAIIAdapter 适配器，用于将 greed_nsgaii.GreedNSGAIIAlgorithm 适配到 SchedulingAlgorithm 接口
-type greedNSGAIIAdapter struct {
+// GreedNSGAIIAdapter 适配器，用于将 greed_nsgaii.GreedNSGAIIAlgorithm 适配到 SchedulingAlgorithm 接口
+type GreedNSGAIIAdapter struct {
 	algo *greed_nsgaii.GreedNSGAIIAlgorithm
 }
 
-func (a *greedNSGAIIAdapter) Name() string {
+// NewGreedNSGAIIAdapter 创建 GREED-NSGAII 算法适配器
+func NewGreedNSGAIIAdapter(taskType greed_nsgaii.TaskType, targetCoverage, coverageRadius float64) *GreedNSGAIIAdapter {
+	algo := greed_nsgaii.NewGreedNSGAIIAlgorithm(taskType, targetCoverage, coverageRadius)
+	return &GreedNSGAIIAdapter{algo: algo}
+}
+
+func (a *GreedNSGAIIAdapter) Name() string {
 	return a.algo.Name()
 }
 
-func (a *greedNSGAIIAdapter) Filter(ctx context.Context, pod *v1.Pod, metrics []*models.UAVMetrics) ([]*models.UAVMetrics, error) {
+func (a *GreedNSGAIIAdapter) Filter(ctx context.Context, pod *v1.Pod, metrics []*models.UAVMetrics) ([]*models.UAVMetrics, error) {
 	return a.algo.Filter(ctx, pod, metrics)
 }
 
-func (a *greedNSGAIIAdapter) Score(ctx context.Context, pod *v1.Pod, metrics []*models.UAVMetrics) ([]NodeScore, error) {
+func (a *GreedNSGAIIAdapter) Score(ctx context.Context, pod *v1.Pod, metrics []*models.UAVMetrics) ([]NodeScore, error) {
 	// 调用底层算法的 Score 方法
 	scores, err := a.algo.Score(ctx, pod, metrics)
 	if err != nil {
@@ -294,4 +300,9 @@ func (a *greedNSGAIIAdapter) Score(ctx context.Context, pod *v1.Pod, metrics []*
 	}
 
 	return result, nil
+}
+
+// GetUnderlyingAlgorithm 返回底层的 GreedNSGAIIAlgorithm（用于 RecordBinding 等操作）
+func (a *GreedNSGAIIAdapter) GetUnderlyingAlgorithm() *greed_nsgaii.GreedNSGAIIAlgorithm {
+	return a.algo
 }

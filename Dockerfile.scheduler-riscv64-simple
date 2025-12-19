@@ -1,0 +1,22 @@
+# Simple Dockerfile for UAV Scheduler RISC-V (using pre-built binary)
+FROM riscv64/alpine:edge
+
+# 安装 CA 证书
+RUN apk --no-cache add ca-certificates
+
+# 创建非 root 用户
+RUN addgroup -S uav && adduser -S uav -G uav
+
+WORKDIR /app
+
+# 复制已编译的 RISC-V 二进制文件
+COPY bin/uav-scheduler-riscv64 /app/uav-scheduler
+
+# 确保二进制文件可执行
+RUN chmod +x /app/uav-scheduler
+
+# 使用非 root 用户运行
+USER uav
+
+# 启动命令
+ENTRYPOINT ["/app/uav-scheduler"]
