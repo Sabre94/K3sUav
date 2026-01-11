@@ -11,6 +11,11 @@ SCHEDULER_IMAGE := uav-scheduler
 SCHEDULER_TAG := v0.1.0
 SCHEDULER_FULL_IMAGE := $(SCHEDULER_IMAGE):$(SCHEDULER_TAG)
 
+TASK_CONTROLLER_IMAGE := uav-task-controller
+TASK_CONTROLLER_TAG := v0.1.0
+TASK_CONTROLLER_FULL_IMAGE := $(TASK_CONTROLLER_IMAGE):$(TASK_CONTROLLER_TAG)
+TASK_CONTROLLER_REGISTRY_IMAGE := $(DOCKER_REGISTRY)/$(TASK_CONTROLLER_IMAGE):$(TASK_CONTROLLER_TAG)
+
 # 编译二进制文件
 build:
 	@echo "🔨 编译 UAV Agent..."
@@ -183,3 +188,72 @@ help:
 	@echo "  make test-scheduler        - 本地测试 Scheduler"
 	@echo "  make clean-scheduler       - 清理 Scheduler"
 	@echo ""
+
+# ============================================
+# Task Controller (自动调度控制器)
+# ============================================
+
+# 编译 Task Controller
+build-task-controller:
+	@echo "🔨 编译 UAV Task Controller..."
+	@export PATH=$$PATH:/usr/local/go/bin && \
+	go build -o bin/uav-task-controller ./cmd/task-controller/
+	@echo "✅ 编译完成: bin/uav-task-controller"
+
+# 构建 Task Controller 镜像
+build-task-controller-image: build-task-controller
+	@echo "🐳 构建 Task Controller Docker 镜像..."
+	@docker build -f Dockerfile.task-controller -t $(TASK_CONTROLLER_FULL_IMAGE) -t $(TASK_CONTROLLER_REGISTRY_IMAGE) .
+	@echo "✅ 镜像已构建: $(TASK_CONTROLLER_FULL_IMAGE)"
+
+# 推送 Task Controller 镜像
+push-task-controller:
+	@echo "📤 推送 Task Controller 镜像到 Docker Hub..."
+	@docker push $(TASK_CONTROLLER_REGISTRY_IMAGE)
+	@echo "✅ 镜像已推送: $(TASK_CONTROLLER_REGISTRY_IMAGE)"
+
+# 部署 UAVTask CRD
+deploy-task-crd:
+	@echo "📋 部署 UAVTask CRD..."
+	@kubectl apply -f api/crd/uav-task-crd.yaml
+	@echo "✅ UAVTask CRD 已部署"
+
+# 部署 Task Controller
+deploy-task-controller:
+	@echo "🚀 部署 Task Controller..."
+	@kubectl apply -f deploy/task-controller-deployment.yaml
+	@echo "✅ Task Controller 已部署"
+
+# 查看 Task Controller 状态
+task-controller-status:
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "  Task Controller Pod 状态"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@kubectl get pods -l app=uav-task-controller -o wide
+
+# 查看 Task Controller 日志
+task-controller-logs:
+	@kubectl logs -l app=uav-task-controller -f
+
+# 查看所有 UAVTask 资源
+list-tasks:
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "  UAVTask 资源列表"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@kubectl get uavtasks -A
+
+# 创建示例任务
+create-example-task:
+	@echo "🚀 创建示例 UAVTask..."
+	@kubectl apply -f examples/uavtask-example.yaml
+	@echo "✅ 示例任务已创建"
+
+# 清理 Task Controller
+clean-task-controller:
+	@echo "🗑️  清理 Task Controller..."
+	@kubectl delete -f deploy/task-controller-deployment.yaml || true
+	@echo "✅ Task Controller 已清理"
+
+# 完整部署（CRD + Controller）
+deploy-task-system: deploy-task-crd deploy-task-controller
+	@echo "✅ UAV Task 系统部署完成"

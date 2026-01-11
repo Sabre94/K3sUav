@@ -1,0 +1,120 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: uavtasks.uav.k3s.io
+spec:
+  group: uav.k3s.io
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - template
+              properties:
+                # 算法配置
+                algorithm:
+                  type: string
+                  default: "greed-nsgaii"
+                  enum:
+                    - "greed-nsgaii"
+                    - "coverage-based"
+                targetCoverage:
+                  type: number
+                  format: double
+                  default: 0.9
+                  minimum: 0.0
+                  maximum: 1.0
+                  description: "目标覆盖率 (0.0-1.0)"
+                coverageRadius:
+                  type: number
+                  format: double
+                  default: 500.0
+                  description: "覆盖半径（米）"
+                taskType:
+                  type: integer
+                  default: 0
+                  description: "任务类型：0=default, 1=surveillance, 2=delivery"
+
+                # Pod 模板
+                template:
+                  type: object
+                  properties:
+                    metadata:
+                      type: object
+                      properties:
+                        labels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        annotations:
+                          type: object
+                          additionalProperties:
+                            type: string
+                    spec:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                  required:
+                    - spec
+
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - "Pending"
+                    - "Calculating"
+                    - "Deploying"
+                    - "Running"
+                    - "Failed"
+                message:
+                  type: string
+                selectedNodes:
+                  type: array
+                  items:
+                    type: string
+                nodeCount:
+                  type: integer
+                podCount:
+                  type: integer
+                coverageRatio:
+                  type: number
+                  format: double
+                lastUpdateTime:
+                  type: string
+                  format: date-time
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Algorithm
+          type: string
+          jsonPath: .spec.algorithm
+        - name: Target Coverage
+          type: string
+          jsonPath: .spec.targetCoverage
+        - name: Node Count
+          type: integer
+          jsonPath: .status.nodeCount
+        - name: Pod Count
+          type: integer
+          jsonPath: .status.podCount
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: uavtasks
+    singular: uavtask
+    kind: UAVTask
+    shortNames:
+      - ut

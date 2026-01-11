@@ -1,0 +1,32 @@
+apiVersion: uav.k3s.io/v1
+kind: UAVTask
+metadata:
+  name: coverage-task-demo
+  namespace: default
+spec:
+  # 算法配置
+  algorithm: greed-nsgaii
+  targetCoverage: 0.9       # 目标覆盖率 90%
+  coverageRadius: 500.0     # 覆盖半径 500米
+  taskType: 0               # 任务类型：0=default
+
+  # Pod 模板（不需要指定副本数，算法自动计算）
+  template:
+    metadata:
+      labels:
+        app: coverage-app
+        task-type: uav-coverage
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: 50m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+      restartPolicy: Always

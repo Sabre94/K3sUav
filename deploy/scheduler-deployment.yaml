@@ -22,6 +22,11 @@ rules:
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
 
+  # 删除 Pod（用于自适应重调度）
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+
   # 绑定 Pod 到节点
   - apiGroups: [""]
     resources: ["pods/binding"]
@@ -76,7 +81,7 @@ metadata:
 data:
   # 调度器配置
   SCHEDULER_NAME: "uav-scheduler"
-  ALGORITHM_NAME: "composite"  # 可选: distance-based, battery-aware, network-latency, composite
+  ALGORITHM_NAME: "greed-nsgaii"  # 使用 greed-nsgaii 算法
   NAMESPACE: "default"
   LOG_LEVEL: "info"
   STRUCTURED_LOGGING: "false"
@@ -90,6 +95,16 @@ data:
 
   # Network-latency 算法参数
   MAX_LATENCY: "200.0"  # 最大延迟（毫秒）
+
+  # Adaptive Scheduling (greed-nsgaii) 配置
+  ENABLE_ADAPTIVE_SCHEDULING: "true"
+  AUTO_EXECUTE: "false"  # 禁用自动执行，只做监控
+  TARGET_COVERAGE: "0.9"        # 目标覆盖率 90%
+  MIN_COVERAGE: "0.7"           # 最低覆盖率 70%
+  MINOR_DROP_THRESHOLD: "0.1"   # 小幅下降阈值 10%
+  MAJOR_DROP_THRESHOLD: "0.3"   # 大幅下降阈值 30%
+  COVERAGE_RADIUS: "500.0"      # 覆盖半径（米）
+  TASK_TYPE: "0"                # 任务类型：0=default
 
 ---
 # Deployment - 调度器部署
@@ -118,7 +133,7 @@ spec:
 
       containers:
       - name: scheduler
-        image: x1224403599/uav-scheduler:v0.3.0
+        image: x1224403599/uav-scheduler:v0.3.1
         imagePullPolicy: Always
 
         envFrom:
@@ -151,9 +166,9 @@ spec:
 
       restartPolicy: Always
 
-      # 调度到 master 节点（可选）
-      # nodeSelector:
-      #   node-role.kubernetes.io/master: "true"
+      # 调度到 master 节点
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
 
       # 容忍度（允许在 master 节点运行）
       tolerations:

@@ -8,6 +8,7 @@ import (
 
 	"github.com/k3suav/uav-monitor/pkg/k8s"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/algorithm"
+	"github.com/k3suav/uav-monitor/pkg/scheduler/algorithm/greed_nsgaii"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/config"
 	"github.com/sirupsen/logrus"
 
@@ -205,14 +206,21 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 		"algorithm": selectedAlgo.Name(),
 	}).Debug("Algorithm selected for pod")
 
-	// 2. 【coverage-based 特殊处理】如果是覆盖率算法，加锁确保串行调度（贪心算法）
+	// 2. 【coverage-based 和 greed-nsgaii 特殊处理】加锁确保串行调度（贪心算法）
 	var coverageAlgo *algorithm.CoverageBasedAlgorithm
+	var greedAlgo *greed_nsgaii.GreedNSGAIIAlgorithm
+
 	if selectedAlgo.Name() == "coverage-based" {
 		if ca, ok := selectedAlgo.(*algorithm.CoverageBasedAlgorithm); ok {
 			coverageAlgo = ca
 			// 加锁：确保同一个 Deployment 的多个 Pod 串行调度
 			coverageAlgo.LockDeployment(getDeploymentName(pod))
 			defer coverageAlgo.UnlockDeployment(getDeploymentName(pod))
+		}
+	} else if selectedAlgo.Name() == "greed-nsgaii" {
+		// 获取底层的 GreedNSGAIIAlgorithm
+		if adapter, ok := selectedAlgo.(*algorithm.GreedNSGAIIAdapter); ok {
+			greedAlgo = adapter.GetUnderlyingAlgorithm()
 		}
 	}
 
@@ -264,7 +272,7 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 		return fmt.Errorf("bind error: %w", err)
 	}
 
-	// 7. 【贪心算法关键】绑定成功后，记录到 coverage-based 算法的缓存
+	// 7. 【贪心算法关键】绑定成功后，记录到算法的缓存
 	if coverageAlgo != nil {
 		// 增量覆盖 = 分数 / 100
 		incrementalCoverage := bestScore / 100.0
@@ -275,6 +283,14 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 			"node": bestNode,
 			"incrementalCoverage": fmt.Sprintf("%.2f%%", incrementalCoverage),
 		}).Debug("Recorded coverage binding")
+	} else if greedAlgo != nil {
+		// 记录 greed-nsgaii 算法的节点绑定
+		greedAlgo.RecordBinding(pod, bestNode, metrics)
+
+		s.log.WithFields(logrus.Fields{
+			"pod":  pod.Name,
+			"node": bestNode,
+		}).Debug("Recorded greed-nsgaii binding")
 	}
 
 	// 8. 【自适应调度】只为覆盖率算法注册监控

@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-coverage-app
+  namespace: default
+  labels:
+    app: test-coverage
+spec:
+  replicas: 10  # 设置10个副本，让算法自动选择最优节点数量
+  selector:
+    matchLabels:
+      app: test-coverage
+  template:
+    metadata:
+      labels:
+        app: test-coverage
+    spec:
+      schedulerName: uav-scheduler  # 使用 UAV 调度器
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: 50m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+      restartPolicy: Always

@@ -1,0 +1,128 @@
+---
+# ServiceAccount for UAV Task Controller
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: uav-task-controller
+  namespace: default
+  labels:
+    app: uav-task-controller
+
+---
+# ClusterRole - 控制器需要的权限
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: uav-task-controller
+  labels:
+    app: uav-task-controller
+rules:
+  # 读取和更新 UAVTask CRD
+  - apiGroups: ["uav.k3s.io"]
+    resources: ["uavtasks"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+
+  # 更新 UAVTask 状态
+  - apiGroups: ["uav.k3s.io"]
+    resources: ["uavtasks/status"]
+    verbs: ["update", "patch"]
+
+  # 读取 UAVMetrics CRD
+  - apiGroups: ["uav.k3s.io"]
+    resources: ["uavmetrics"]
+    verbs: ["get", "list", "watch"]
+
+  # 创建和管理 Pod
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+
+  # 读取节点信息
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+
+  # 创建 Events（用于记录事件）
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+---
+# ClusterRoleBinding - 绑定权限
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: uav-task-controller
+  labels:
+    app: uav-task-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: uav-task-controller
+subjects:
+  - kind: ServiceAccount
+    name: uav-task-controller
+    namespace: default
+
+---
+# Deployment - 控制器部署
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: uav-task-controller
+  namespace: default
+  labels:
+    app: uav-task-controller
+    version: v0.1.0
+spec:
+  replicas: 1  # 单副本运行
+  selector:
+    matchLabels:
+      app: uav-task-controller
+
+  template:
+    metadata:
+      labels:
+        app: uav-task-controller
+        version: v0.1.0
+
+    spec:
+      serviceAccountName: uav-task-controller
+
+      containers:
+      - name: controller
+        image: x1224403599/uav-task-controller:v0.1.0
+        imagePullPolicy: Always
+
+        env:
+          - name: NAMESPACE
+            value: "default"
+          - name: LOG_LEVEL
+            value: "info"
+          - name: CRD_GROUP
+            value: "uav.k3s.io"
+          - name: CRD_VERSION
+            value: "v1"
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+
+      restartPolicy: Always
+
+      # 调度到 master 节点
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+
+      # 容忍度（允许在 master 节点运行）
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
