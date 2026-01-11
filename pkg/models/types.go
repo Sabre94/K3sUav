@@ -14,6 +14,9 @@ type UAVMetrics struct {
 	Performance *PerformanceData  `json:"performance,omitempty"`
 	Health      *HealthData       `json:"health,omitempty"`
 	Metadata    *MetadataInfo     `json:"metadata,omitempty"`
+	Position    *PositionData     `json:"position,omitempty"`    // 笛卡尔坐标系位置
+	Velocity    *VelocityData     `json:"velocity,omitempty"`    // 速度向量
+	Simulation  *SimulationInfo   `json:"simulation,omitempty"`  // 仿真元数据
 }
 
 // GPSData contains GPS location information
@@ -142,4 +145,25 @@ func (b *BatteryData) IsLowBattery(threshold float64) bool {
 // IsCriticalBattery checks if battery is critically low
 func (b *BatteryData) IsCriticalBattery() bool {
 	return b.RemainingPercent < 20.0
+}
+
+// PositionData contains Cartesian position coordinates
+type PositionData struct {
+	X float64 `json:"x"` // X coordinate in meters
+	Y float64 `json:"y"` // Y coordinate in meters
+	Z float64 `json:"z"` // Z coordinate in meters (altitude)
+}
+
+// VelocityData contains velocity vector
+type VelocityData struct {
+	Vx float64 `json:"vx"` // Velocity in X direction (m/s)
+	Vy float64 `json:"vy"` // Velocity in Y direction (m/s)
+	Vz float64 `json:"vz"` // Velocity in Z direction (m/s)
+}
+
+// SimulationInfo contains simulation metadata
+type SimulationInfo struct {
+	VMID         string `json:"vmId,omitempty"`         // VM/Drone ID in simulation
+	SimulationID string `json:"simulationId,omitempty"` // Simulation scenario ID
+	TimeStep     int    `json:"timeStep,omitempty"`     // Current simulation time step
 }

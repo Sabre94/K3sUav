@@ -1,0 +1,134 @@
+---
+# 仿真模式测试 DaemonSet
+# 使用仿真数据测试UAV Agent
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: uav-agent-sim-test
+  namespace: default
+  labels:
+    app: uav-agent-sim
+    version: v0.3.0-simulation
+spec:
+  selector:
+    matchLabels:
+      app: uav-agent-sim
+
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+
+  template:
+    metadata:
+      labels:
+        app: uav-agent-sim
+        version: v0.3.0-simulation
+
+    spec:
+      serviceAccountName: uav-agent
+
+      # 容忍度 - 允许在 master 节点运行
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+
+      containers:
+      - name: uav-agent
+        # V0.3.0 - 包含仿真支持和智能推送机制
+        image: x1224403599/uav-agent:v0.3.0
+        imagePullPolicy: IfNotPresent
+
+        env:
+        # 节点名称
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+
+        # 日志级别
+        - name: LOG_LEVEL
+          value: "debug"
+
+        # 启用仿真模式 ⭐ 新增
+        - name: SIMULATION_ENABLED
+          value: "true"
+
+        # 仿真数据路径 ⭐ 新增
+        - name: SIMULATION_DATA_PATH
+          value: "/data/sim/current.json"
+
+        # 采集间隔（快速采样，5秒读取一次仿真数据）
+        - name: COLLECTION_INTERVAL
+          value: "5s"
+
+        # 变化检测配置 ⭐ 新增
+        - name: ENABLE_CHANGE_DETECTION
+          value: "true"
+
+        # 位置变化阈值（5米）
+        - name: POSITION_CHANGE_THRESHOLD
+          value: "5.0"
+
+        # 电量变化阈值（1%）
+        - name: BATTERY_CHANGE_THRESHOLD
+          value: "1.0"
+
+        # 最小更新间隔（防止过于频繁）
+        - name: MIN_UPDATE_INTERVAL
+          value: "3s"
+
+        # 最大更新间隔（强制推送）
+        - name: MAX_UPDATE_INTERVAL
+          value: "30s"
+
+        # 命名空间
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+
+        # UAV 硬件信息
+        - name: UAV_HARDWARE_MODEL
+          value: "Simulation-Drone-v1"
+        - name: UAV_FIRMWARE_VERSION
+          value: "1.0.0-sim"
+
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+
+        # 挂载卷
+        volumeMounts:
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+        - name: sim-data  # ⭐ 新增：挂载仿真数据目录
+          mountPath: /data/sim
+          readOnly: true
+
+      volumes:
+      - name: proc
+        hostPath:
+          path: /proc
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: sim-data  # ⭐ 新增：仿真数据卷
+        hostPath:
+          path: /data/sim
+          type: Directory
+
+      restartPolicy: Always
+      dnsPolicy: ClusterFirst

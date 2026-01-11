@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -19,6 +20,9 @@ type Config struct {
 
 	// UAV metadata
 	UAVMetadata UAVMetadataConfig `json:"uavMetadata"`
+
+	// Simulation configuration
+	Simulation SimulationConfig `json:"simulation"`
 }
 
 // AgentConfig contains agent-specific settings
@@ -62,7 +66,7 @@ type K8sConfig struct {
 
 // CollectionConfig contains data collection settings
 type CollectionConfig struct {
-	// Collection interval
+	// Collection interval (data sampling rate)
 	Interval time.Duration `json:"interval"`
 
 	// GPS collection enabled
@@ -91,6 +95,23 @@ type CollectionConfig struct {
 
 	// GPS minimum satellites
 	GPSMinSatellites int `json:"gpsMinSatellites"`
+
+	// --- Change Detection Thresholds ---
+
+	// Enable change-based update (vs time-based only)
+	EnableChangeDetection bool `json:"enableChangeDetection"`
+
+	// Position change threshold in meters (default: 5.0)
+	PositionChangeThreshold float64 `json:"positionChangeThreshold"`
+
+	// Battery change threshold in percentage (default: 1.0)
+	BatteryChangeThreshold float64 `json:"batteryChangeThreshold"`
+
+	// Minimum update interval - prevent too frequent updates (default: 5s)
+	MinUpdateInterval time.Duration `json:"minUpdateInterval"`
+
+	// Maximum update interval - force update even if no change (default: 30s)
+	MaxUpdateInterval time.Duration `json:"maxUpdateInterval"`
 }
 
 // UAVMetadataConfig contains UAV hardware metadata
@@ -103,6 +124,15 @@ type UAVMetadataConfig struct {
 
 	// Serial number
 	SerialNumber string `json:"serialNumber"`
+}
+
+// SimulationConfig contains simulation mode settings
+type SimulationConfig struct {
+	// Enable simulation mode
+	Enabled bool `json:"enabled"`
+
+	// Path to simulation data file
+	DataPath string `json:"dataPath"`
 }
 
 // DefaultConfig returns a default configuration
@@ -134,11 +164,21 @@ func DefaultConfig() *Config {
 			BatteryLowThreshold:      30.0,
 			BatteryCriticalThreshold: 20.0,
 			GPSMinSatellites:         4,
+			// Change detection settings
+			EnableChangeDetection:    getEnvBoolOrDefault("ENABLE_CHANGE_DETECTION", true),
+			PositionChangeThreshold:  getEnvFloatOrDefault("POSITION_CHANGE_THRESHOLD", 5.0),   // 5 meters
+			BatteryChangeThreshold:   getEnvFloatOrDefault("BATTERY_CHANGE_THRESHOLD", 1.0),    // 1%
+			MinUpdateInterval:        getEnvDurationOrDefault("MIN_UPDATE_INTERVAL", 5*time.Second),  // 5s
+			MaxUpdateInterval:        getEnvDurationOrDefault("MAX_UPDATE_INTERVAL", 30*time.Second), // 30s
 		},
 		UAVMetadata: UAVMetadataConfig{
 			HardwareModel:   getEnvOrDefault("UAV_HARDWARE_MODEL", "Generic-UAV-v1"),
 			FirmwareVersion: getEnvOrDefault("UAV_FIRMWARE_VERSION", "1.0.0"),
 			SerialNumber:    getEnvOrDefault("UAV_SERIAL_NUMBER", "UAV-000000"),
+		},
+		Simulation: SimulationConfig{
+			Enabled:  getEnvBoolOrDefault("SIMULATION_ENABLED", false),
+			DataPath: getEnvOrDefault("SIMULATION_DATA_PATH", "/data/sim/current.json"),
 		},
 	}
 }
@@ -205,4 +245,16 @@ func getEnvDurationOrDefault(key string, defaultValue time.Duration) time.Durati
 		return defaultValue
 	}
 	return duration
+}
+
+func getEnvFloatOrDefault(key string, defaultValue float64) float64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	floatVal, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return defaultValue
+	}
+	return floatVal
 }

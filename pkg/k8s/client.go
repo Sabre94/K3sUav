@@ -13,55 +13,36 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// Client is a Kubernetes client wrapper for UAV CRD operations
+// Client K8s客户端
 type Client struct {
 	dynamicClient dynamic.Interface
-	clientset     *kubernetes.Clientset
 	config        *config.Config
 	gvr           schema.GroupVersionResource
 }
 
-// NewClient creates a new Kubernetes client
+// NewClient 创建K8s客户端
 func NewClient(cfg *config.Config) (*Client, error) {
-	var k8sConfig *rest.Config
-	var err error
-
-	// Try to use in-cluster config first, then kubeconfig
-	if cfg.Kubernetes.KubeconfigPath == "" {
-		k8sConfig, err = rest.InClusterConfig()
+	// 使用in-cluster配置或kubeconfig
+	k8sConfig, err := rest.InClusterConfig()
+	if err != nil {
+		// 回退到默认kubeconfig
+		k8sConfig, err = clientcmd.BuildConfigFromFlags("", clientcmd.RecommendedHomeFile)
 		if err != nil {
-			// Fall back to default kubeconfig location
-			kubeconfigPath := clientcmd.RecommendedHomeFile
-			k8sConfig, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-			if err != nil {
-				return nil, fmt.Errorf("failed to build kubernetes config: %w", err)
-			}
-		}
-	} else {
-		k8sConfig, err = clientcmd.BuildConfigFromFlags("", cfg.Kubernetes.KubeconfigPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build kubernetes config from %s: %w", cfg.Kubernetes.KubeconfigPath, err)
+			return nil, fmt.Errorf("failed to build k8s config: %w", err)
 		}
 	}
 
-	// Create dynamic client
+	// 创建dynamic client
 	dynamicClient, err := dynamic.NewForConfig(k8sConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
 
-	// Create standard kubernetes clientset
-	clientset, err := kubernetes.NewForConfig(k8sConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create kubernetes clientset: %w", err)
-	}
-
-	// Define GVR (GroupVersionResource)
+	// 定义GVR (GroupVersionResource)
 	gvr := schema.GroupVersionResource{
 		Group:    cfg.Kubernetes.CRDGroup,
 		Version:  cfg.Kubernetes.CRDVersion,
@@ -70,72 +51,18 @@ func NewClient(cfg *config.Config) (*Client, error) {
 
 	return &Client{
 		dynamicClient: dynamicClient,
-		clientset:     clientset,
 		config:        cfg,
 		gvr:           gvr,
 	}, nil
 }
 
-// Clientset returns the kubernetes clientset
-func (c *Client) Clientset() *kubernetes.Clientset {
-	return c.clientset
-}
-
-// CreateOrUpdateUAVMetrics creates or updates a UAVMetrics CRD
-func (c *Client) CreateOrUpdateUAVMetrics(ctx context.Context, metrics *models.UAVMetrics) error {
-	// Convert metrics to unstructured data
-	unstructuredData, err := c.metricsToUnstructured(metrics)
-	if err != nil {
-		return fmt.Errorf("failed to convert metrics to unstructured: %w", err)
-	}
-
-	// Set metadata
-	name := fmt.Sprintf("uav-%s", metrics.NodeName)
-	unstructuredData.SetName(name)
-	unstructuredData.SetNamespace(c.config.Kubernetes.Namespace)
-
-	// Add labels
-	labels := map[string]string{
-		"app":       "uav-agent",
-		"node-name": metrics.NodeName,
-	}
-	unstructuredData.SetLabels(labels)
-
-	// Try to get existing resource
-	existing, err := c.dynamicClient.Resource(c.gvr).
-		Namespace(c.config.Kubernetes.Namespace).
-		Get(ctx, name, metav1.GetOptions{})
-
-	if err != nil {
-		// Resource doesn't exist, create it
-		_, err = c.dynamicClient.Resource(c.gvr).
-			Namespace(c.config.Kubernetes.Namespace).
-			Create(ctx, unstructuredData, metav1.CreateOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to create UAVMetrics: %w", err)
-		}
-		return nil
-	}
-
-	// Resource exists, update it
-	unstructuredData.SetResourceVersion(existing.GetResourceVersion())
-	_, err = c.dynamicClient.Resource(c.gvr).
-		Namespace(c.config.Kubernetes.Namespace).
-		Update(ctx, unstructuredData, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to update UAVMetrics: %w", err)
-	}
-
-	return nil
-}
-
-// CreateOrUpdateWithRetry creates or updates with retry logic
+// CreateOrUpdateWithRetry 创建或更新UAVMetrics（带重试）
 func (c *Client) CreateOrUpdateWithRetry(ctx context.Context, metrics *models.UAVMetrics) error {
 	var lastErr error
 
 	for attempt := 0; attempt <= c.config.Kubernetes.RetryAttempts; attempt++ {
 		if attempt > 0 {
-			// Wait before retry
+			// 重试前等待
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -143,7 +70,7 @@ func (c *Client) CreateOrUpdateWithRetry(ctx context.Context, metrics *models.UA
 			}
 		}
 
-		err := c.CreateOrUpdateUAVMetrics(ctx, metrics)
+		err := c.createOrUpdate(ctx, metrics)
 		if err == nil {
 			return nil
 		}
@@ -153,140 +80,90 @@ func (c *Client) CreateOrUpdateWithRetry(ctx context.Context, metrics *models.UA
 	return fmt.Errorf("failed after %d attempts: %w", c.config.Kubernetes.RetryAttempts+1, lastErr)
 }
 
-// GetUAVMetrics retrieves a UAVMetrics CRD
-func (c *Client) GetUAVMetrics(ctx context.Context, nodeName string) (*models.UAVMetrics, error) {
-	name := fmt.Sprintf("uav-%s", nodeName)
+// createOrUpdate 创建或更新UAVMetrics
+func (c *Client) createOrUpdate(ctx context.Context, metrics *models.UAVMetrics) error {
+	// 转换为unstructured格式
+	obj, err := c.toUnstructured(metrics)
+	if err != nil {
+		return fmt.Errorf("failed to convert to unstructured: %w", err)
+	}
 
-	unstructuredData, err := c.dynamicClient.Resource(c.gvr).
+	// 设置资源名称和命名空间
+	name := fmt.Sprintf("uav-%s", metrics.NodeName)
+	obj.SetName(name)
+	obj.SetNamespace(c.config.Kubernetes.Namespace)
+	obj.SetLabels(map[string]string{
+		"app":       "uav-agent",
+		"node-name": metrics.NodeName,
+	})
+
+	// 尝试获取现有资源
+	existing, err := c.dynamicClient.Resource(c.gvr).
 		Namespace(c.config.Kubernetes.Namespace).
 		Get(ctx, name, metav1.GetOptions{})
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to get UAVMetrics: %w", err)
+		// 资源不存在，创建
+		_, err = c.dynamicClient.Resource(c.gvr).
+			Namespace(c.config.Kubernetes.Namespace).
+			Create(ctx, obj, metav1.CreateOptions{})
+		return err
 	}
 
-	// Convert unstructured to metrics
-	metrics, err := c.unstructuredToMetrics(unstructuredData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert unstructured to metrics: %w", err)
-	}
-
-	return metrics, nil
-}
-
-// ListUAVMetrics lists all UAVMetrics CRDs
-func (c *Client) ListUAVMetrics(ctx context.Context) ([]*models.UAVMetrics, error) {
-	unstructuredList, err := c.dynamicClient.Resource(c.gvr).
+	// 资源存在，更新
+	obj.SetResourceVersion(existing.GetResourceVersion())
+	_, err = c.dynamicClient.Resource(c.gvr).
 		Namespace(c.config.Kubernetes.Namespace).
-		List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list UAVMetrics: %w", err)
-	}
-
-	metrics := make([]*models.UAVMetrics, 0, len(unstructuredList.Items))
-	for _, item := range unstructuredList.Items {
-		m, err := c.unstructuredToMetrics(&item)
-		if err != nil {
-			// Log error but continue with other items
-			continue
-		}
-		metrics = append(metrics, m)
-	}
-
-	return metrics, nil
+		Update(ctx, obj, metav1.UpdateOptions{})
+	return err
 }
 
-// DeleteUAVMetrics deletes a UAVMetrics CRD
-func (c *Client) DeleteUAVMetrics(ctx context.Context, nodeName string) error {
-	name := fmt.Sprintf("uav-%s", nodeName)
-
-	err := c.dynamicClient.Resource(c.gvr).
-		Namespace(c.config.Kubernetes.Namespace).
-		Delete(ctx, name, metav1.DeleteOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to delete UAVMetrics: %w", err)
-	}
-
-	return nil
-}
-
-// UpdateStatus updates the status subresource
+// UpdateStatus 更新status子资源
 func (c *Client) UpdateStatus(ctx context.Context, nodeName string, phase string) error {
 	name := fmt.Sprintf("uav-%s", nodeName)
 
-	// Get current resource
-	unstructuredData, err := c.dynamicClient.Resource(c.gvr).
+	// 获取当前资源
+	obj, err := c.dynamicClient.Resource(c.gvr).
 		Namespace(c.config.Kubernetes.Namespace).
 		Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to get UAVMetrics for status update: %w", err)
+		return fmt.Errorf("failed to get UAVMetrics: %w", err)
 	}
 
-	// Update status
+	// 更新status
 	status := map[string]interface{}{
 		"phase":       phase,
 		"lastUpdated": time.Now().Format(time.RFC3339),
 	}
 
-	if err := unstructured.SetNestedMap(unstructuredData.Object, status, "status"); err != nil {
+	if err := unstructured.SetNestedMap(obj.Object, status, "status"); err != nil {
 		return fmt.Errorf("failed to set status: %w", err)
 	}
 
-	// Update status subresource
+	// 更新status子资源
 	_, err = c.dynamicClient.Resource(c.gvr).
 		Namespace(c.config.Kubernetes.Namespace).
-		UpdateStatus(ctx, unstructuredData, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to update status: %w", err)
-	}
-
-	return nil
+		UpdateStatus(ctx, obj, metav1.UpdateOptions{})
+	return err
 }
 
-// Helper functions
-
-func (c *Client) metricsToUnstructured(metrics *models.UAVMetrics) (*unstructured.Unstructured, error) {
-	// Convert metrics to JSON
+// toUnstructured 将UAVMetrics转换为unstructured格式
+func (c *Client) toUnstructured(metrics *models.UAVMetrics) (*unstructured.Unstructured, error) {
 	data, err := json.Marshal(metrics)
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert JSON to map
 	var spec map[string]interface{}
 	if err := json.Unmarshal(data, &spec); err != nil {
 		return nil, err
 	}
 
-	// Create unstructured object
-	obj := &unstructured.Unstructured{
+	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": fmt.Sprintf("%s/%s", c.config.Kubernetes.CRDGroup, c.config.Kubernetes.CRDVersion),
 			"kind":       "UAVMetrics",
 			"spec":       spec,
 		},
-	}
-
-	return obj, nil
-}
-
-func (c *Client) unstructuredToMetrics(obj *unstructured.Unstructured) (*models.UAVMetrics, error) {
-	// Extract spec
-	spec, found, err := unstructured.NestedMap(obj.Object, "spec")
-	if err != nil || !found {
-		return nil, fmt.Errorf("spec not found in unstructured object")
-	}
-
-	// Convert spec to JSON
-	data, err := json.Marshal(spec)
-	if err != nil {
-		return nil, err
-	}
-
-	// Unmarshal to metrics
-	var metrics models.UAVMetrics
-	if err := json.Unmarshal(data, &metrics); err != nil {
-		return nil, err
-	}
-
-	return &metrics, nil
+	}, nil
 }

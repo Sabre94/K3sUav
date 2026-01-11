@@ -271,6 +271,54 @@ spec:
                     type: string
                     description: "UAV serial number"
 
+              # 笛卡尔坐标系位置
+              position:
+                type: object
+                properties:
+                  x:
+                    type: number
+                    format: double
+                    description: "X coordinate in meters"
+                  y:
+                    type: number
+                    format: double
+                    description: "Y coordinate in meters"
+                  z:
+                    type: number
+                    format: double
+                    description: "Z coordinate in meters (altitude)"
+
+              # 速度向量
+              velocity:
+                type: object
+                properties:
+                  vx:
+                    type: number
+                    format: double
+                    description: "Velocity in X direction (m/s)"
+                  vy:
+                    type: number
+                    format: double
+                    description: "Velocity in Y direction (m/s)"
+                  vz:
+                    type: number
+                    format: double
+                    description: "Velocity in Z direction (m/s)"
+
+              # 仿真元数据
+              simulation:
+                type: object
+                properties:
+                  vmId:
+                    type: string
+                    description: "VM/Drone ID in simulation"
+                  simulationId:
+                    type: string
+                    description: "Simulation scenario ID"
+                  timeStep:
+                    type: integer
+                    description: "Current simulation time step"
+
           # Status 字段（由系统管理）
           status:
             type: object

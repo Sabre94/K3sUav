@@ -1400,8 +1400,6 @@ K3sUav/
 ├── cmd/
 │   ├── agent/
 │   │   └── main.go                           # UAV Agent entry point
-│   ├── router/
-│   │   └── main.go                           # Istio router integration
 │   └── scheduler/
 │       └── main.go                           # Scheduler entry point (99-136)
 ├── pkg/

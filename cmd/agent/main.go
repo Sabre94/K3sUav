@@ -11,6 +11,7 @@ import (
 	"github.com/k3suav/uav-monitor/pkg/collector"
 	"github.com/k3suav/uav-monitor/pkg/config"
 	"github.com/k3suav/uav-monitor/pkg/k8s"
+	"github.com/k3suav/uav-monitor/pkg/models"
 	"github.com/sirupsen/logrus"
 )
 
@@ -38,6 +39,8 @@ func main() {
 		"nodeName":           cfg.Agent.NodeName,
 		"namespace":          cfg.Kubernetes.Namespace,
 		"collectionInterval": cfg.Collection.Interval,
+		"simulationMode":     cfg.Simulation.Enabled,
+		"changeDetection":    cfg.Collection.EnableChangeDetection,
 	}).Info("Configuration loaded")
 
 	// Create Kubernetes client
@@ -47,9 +50,23 @@ func main() {
 	}
 	log.Info("Kubernetes client initialized")
 
+	// Create change detector
+	changeDetector := collector.NewChangeDetector(cfg)
+	log.WithFields(logrus.Fields{
+		"enabled":           cfg.Collection.EnableChangeDetection,
+		"positionThreshold": fmt.Sprintf("%.1fm", cfg.Collection.PositionChangeThreshold),
+		"batteryThreshold":  fmt.Sprintf("%.1f%%", cfg.Collection.BatteryChangeThreshold),
+		"minUpdateInterval": cfg.Collection.MinUpdateInterval,
+		"maxUpdateInterval": cfg.Collection.MaxUpdateInterval,
+	}).Info("Change detector initialized")
+
 	// Create data collector
 	dataCollector := collector.NewCollector(cfg)
-	log.Info("Data collector initialized")
+	if cfg.Simulation.Enabled {
+		log.WithField("dataPath", cfg.Simulation.DataPath).Info("Simulation mode enabled")
+	} else {
+		log.Info("Real-time mode enabled")
+	}
 
 	// Setup context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
@@ -64,7 +81,7 @@ func main() {
 
 	// Start collection loop in goroutine
 	go func() {
-		errChan <- runCollectionLoop(ctx, cfg, k8sClient, dataCollector)
+		errChan <- runCollectionLoop(ctx, cfg, k8sClient, dataCollector, changeDetector)
 	}()
 
 	// Wait for shutdown signal or error
@@ -93,30 +110,43 @@ func main() {
 	log.Info("UAV Agent stopped")
 }
 
-func runCollectionLoop(ctx context.Context, cfg *config.Config, k8sClient *k8s.Client, dataCollector *collector.Collector) error {
+func runCollectionLoop(ctx context.Context, cfg *config.Config, k8sClient *k8s.Client, dataCollector interface {
+	CollectMetrics(ctx context.Context) (*models.UAVMetrics, error)
+}, changeDetector *collector.ChangeDetector) error {
 	ticker := time.NewTicker(cfg.Collection.Interval)
 	defer ticker.Stop()
 
-	// Initial collection
-	if err := collectAndUpdate(ctx, cfg, k8sClient, dataCollector); err != nil {
+	// Initial collection and push
+	if err := collectAndUpdate(ctx, cfg, k8sClient, dataCollector, changeDetector, true); err != nil {
 		log.WithError(err).Error("Initial collection failed")
 	}
+
+	// Statistics logging ticker
+	statsTicker := time.NewTicker(60 * time.Second) // Log stats every 60s
+	defer statsTicker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("Collection loop stopped")
+			// Log final statistics
+			logChangeDetectionStats(changeDetector)
 			return ctx.Err()
 		case <-ticker.C:
-			if err := collectAndUpdate(ctx, cfg, k8sClient, dataCollector); err != nil {
+			if err := collectAndUpdate(ctx, cfg, k8sClient, dataCollector, changeDetector, false); err != nil {
 				log.WithError(err).Error("Collection failed")
 				// Continue despite errors - don't stop the loop
 			}
+		case <-statsTicker.C:
+			// Periodically log change detection statistics
+			logChangeDetectionStats(changeDetector)
 		}
 	}
 }
 
-func collectAndUpdate(ctx context.Context, cfg *config.Config, k8sClient *k8s.Client, dataCollector *collector.Collector) error {
+func collectAndUpdate(ctx context.Context, cfg *config.Config, k8sClient *k8s.Client, dataCollector interface {
+	CollectMetrics(ctx context.Context) (*models.UAVMetrics, error)
+}, changeDetector *collector.ChangeDetector, forceUpdate bool) error {
 	startTime := time.Now()
 
 	// Collect metrics
@@ -127,15 +157,38 @@ func collectAndUpdate(ctx context.Context, cfg *config.Config, k8sClient *k8s.Cl
 
 	collectionDuration := time.Since(startTime)
 
+	// Check if we should update based on changes (unless forced)
+	shouldUpdate := forceUpdate
+	updateReason := "forced"
+
+	if !forceUpdate {
+		var reason string
+		shouldUpdate, reason = changeDetector.ShouldUpdate(metrics)
+		updateReason = reason
+
+		log.WithFields(logrus.Fields{
+			"nodeName":     metrics.NodeName,
+			"battery":      fmt.Sprintf("%.1f%%", metrics.Battery.RemainingPercent),
+			"shouldUpdate": shouldUpdate,
+			"reason":       reason,
+		}).Debug("Change detection result")
+
+		if !shouldUpdate {
+			// Skip update - no significant change
+			return nil
+		}
+	}
+
 	log.WithFields(logrus.Fields{
-		"nodeName":     metrics.NodeName,
-		"battery":      fmt.Sprintf("%.1f%%", metrics.Battery.RemainingPercent),
-		"gps_lat":      fmt.Sprintf("%.6f", metrics.GPS.Latitude),
-		"gps_lon":      fmt.Sprintf("%.6f", metrics.GPS.Longitude),
-		"gps_sats":     metrics.GPS.Satellites,
-		"health":       metrics.Health.Status,
-		"duration_ms":  collectionDuration.Milliseconds(),
-	}).Debug("Metrics collected")
+		"nodeName":    metrics.NodeName,
+		"battery":     fmt.Sprintf("%.1f%%", metrics.Battery.RemainingPercent),
+		"gps_lat":     fmt.Sprintf("%.6f", metrics.GPS.Latitude),
+		"gps_lon":     fmt.Sprintf("%.6f", metrics.GPS.Longitude),
+		"gps_sats":    metrics.GPS.Satellites,
+		"health":      metrics.Health.Status,
+		"duration_ms": collectionDuration.Milliseconds(),
+		"reason":      updateReason,
+	}).Debug("Metrics collected - pushing update")
 
 	// Update CRD with retry
 	updateStart := time.Now()
@@ -166,14 +219,15 @@ func collectAndUpdate(ctx context.Context, cfg *config.Config, k8sClient *k8s.Cl
 	totalDuration := time.Since(startTime)
 
 	log.WithFields(logrus.Fields{
-		"nodeName":          metrics.NodeName,
-		"battery":           fmt.Sprintf("%.1f%%", metrics.Battery.RemainingPercent),
-		"health":            metrics.Health.Status,
-		"errors":            len(metrics.Health.Errors),
-		"warnings":          len(metrics.Health.Warnings),
-		"collection_ms":     collectionDuration.Milliseconds(),
-		"update_ms":         updateDuration.Milliseconds(),
-		"total_ms":          totalDuration.Milliseconds(),
+		"nodeName":      metrics.NodeName,
+		"battery":       fmt.Sprintf("%.1f%%", metrics.Battery.RemainingPercent),
+		"health":        metrics.Health.Status,
+		"errors":        len(metrics.Health.Errors),
+		"warnings":      len(metrics.Health.Warnings),
+		"collection_ms": collectionDuration.Milliseconds(),
+		"update_ms":     updateDuration.Milliseconds(),
+		"total_ms":      totalDuration.Milliseconds(),
+		"reason":        updateReason,
 	}).Info("Metrics updated successfully")
 
 	// Log warnings and errors
@@ -187,6 +241,18 @@ func collectAndUpdate(ctx context.Context, cfg *config.Config, k8sClient *k8s.Cl
 	}
 
 	return nil
+}
+
+func logChangeDetectionStats(changeDetector *collector.ChangeDetector) {
+	stats := changeDetector.GetStatistics()
+	log.WithFields(logrus.Fields{
+		"total_samples":    stats["total_samples"],
+		"pushed_samples":   stats["pushed_samples"],
+		"push_rate":        fmt.Sprintf("%.1f%%", stats["push_rate_pct"]),
+		"position_changes": stats["position_changes"],
+		"battery_changes":  stats["battery_changes"],
+		"timeout_pushes":   stats["timeout_pushes"],
+	}).Info("Change detection statistics")
 }
 
 func initLogger() {
