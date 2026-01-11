@@ -118,7 +118,7 @@ spec:
 
       containers:
       - name: scheduler
-        image: x1224403599/uav-scheduler:v0.3.3-singleton
+        image: x1224403599/uav-scheduler:v0.3.0
         imagePullPolicy: Always
 
         envFrom:

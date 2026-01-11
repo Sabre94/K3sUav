@@ -14,8 +14,8 @@ RUN go mod download
 # 复制源代码
 COPY . .
 
-# 编译调度器
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -installsuffix cgo -ldflags '-w -s' -o uav-scheduler ./cmd/scheduler/
+# 编译调度器（使用本地架构）
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags '-w -s' -o uav-scheduler ./cmd/scheduler/
 
 # 最终镜像
 FROM alpine:latest

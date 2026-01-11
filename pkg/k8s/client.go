@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -20,6 +21,7 @@ import (
 // Client K8s客户端
 type Client struct {
 	dynamicClient dynamic.Interface
+	clientset     *kubernetes.Clientset
 	config        *config.Config
 	gvr           schema.GroupVersionResource
 }
@@ -42,6 +44,12 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
 
+	// 创建clientset
+	clientset, err := kubernetes.NewForConfig(k8sConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create clientset: %w", err)
+	}
+
 	// 定义GVR (GroupVersionResource)
 	gvr := schema.GroupVersionResource{
 		Group:    cfg.Kubernetes.CRDGroup,
@@ -51,6 +59,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 
 	return &Client{
 		dynamicClient: dynamicClient,
+		clientset:     clientset,
 		config:        cfg,
 		gvr:           gvr,
 	}, nil
@@ -166,4 +175,58 @@ func (c *Client) toUnstructured(metrics *models.UAVMetrics) (*unstructured.Unstr
 			"spec":       spec,
 		},
 	}, nil
+}
+
+// ListUAVMetrics 列出所有UAVMetrics资源
+func (c *Client) ListUAVMetrics(ctx context.Context) ([]*models.UAVMetrics, error) {
+	// 获取所有UAVMetrics资源
+	list, err := c.dynamicClient.Resource(c.gvr).
+		Namespace(c.config.Kubernetes.Namespace).
+		List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list UAVMetrics: %w", err)
+	}
+
+	// 转换为UAVMetrics切片
+	metrics := make([]*models.UAVMetrics, 0, len(list.Items))
+	for _, item := range list.Items {
+		m, err := c.fromUnstructured(&item)
+		if err != nil {
+			// 记录错误但继续处理其他资源
+			continue
+		}
+		metrics = append(metrics, m)
+	}
+
+	return metrics, nil
+}
+
+// fromUnstructured 将unstructured格式转换为UAVMetrics
+func (c *Client) fromUnstructured(obj *unstructured.Unstructured) (*models.UAVMetrics, error) {
+	// 获取spec字段
+	spec, found, err := unstructured.NestedMap(obj.Object, "spec")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get spec: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("spec not found")
+	}
+
+	// 转换为JSON再反序列化
+	data, err := json.Marshal(spec)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal spec: %w", err)
+	}
+
+	var metrics models.UAVMetrics
+	if err := json.Unmarshal(data, &metrics); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal to UAVMetrics: %w", err)
+	}
+
+	return &metrics, nil
+}
+
+// Clientset 返回Kubernetes clientset
+func (c *Client) Clientset() *kubernetes.Clientset {
+	return c.clientset
 }
