@@ -10,6 +10,7 @@ import (
 	"github.com/k3suav/uav-monitor/pkg/models"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/algorithm"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/algorithm/greed_nsgaii"
+	"github.com/k3suav/uav-monitor/pkg/scheduler/anomaly"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/config"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/predictor"
 	"github.com/sirupsen/logrus"
@@ -38,6 +39,13 @@ type Scheduler struct {
 	statePredictor *predictor.StatePredictor
 	// 是否启用预测
 	predictionEnabled bool
+
+	// 异常检测器 - 检测UAV节点的异常状态
+	anomalyDetector *anomaly.AnomalyDetector
+	// 是否启用异常检测
+	anomalyDetectionEnabled bool
+	// 是否过滤不健康节点
+	filterUnhealthyNodes bool
 }
 
 // NewScheduler 创建新的调度器
@@ -97,15 +105,22 @@ func NewScheduler(cfg *config.SchedulerConfig, algo algorithm.SchedulingAlgorith
 	predictorConfig := predictor.DefaultConfig()
 	statePredictor := predictor.NewStatePredictor(predictorConfig)
 
+	// 初始化异常检测器
+	anomalyConfig := anomaly.DefaultConfig()
+	anomalyDetector := anomaly.NewAnomalyDetector(anomalyConfig)
+
 	return &Scheduler{
-		config:            cfg,
-		k8sClientset:      clientset,
-		uavClient:         uavClient,
-		algorithm:         algo,
-		algoFactory:       algorithm.NewAlgorithmFactory(), // 初始化算法工厂
-		log:               log,
-		statePredictor:    statePredictor,
-		predictionEnabled: true, // 默认启用预测
+		config:                  cfg,
+		k8sClientset:            clientset,
+		uavClient:               uavClient,
+		algorithm:               algo,
+		algoFactory:             algorithm.NewAlgorithmFactory(), // 初始化算法工厂
+		log:                     log,
+		statePredictor:          statePredictor,
+		predictionEnabled:       true, // 默认启用预测
+		anomalyDetector:         anomalyDetector,
+		anomalyDetectionEnabled: true,  // 默认启用异常检测
+		filterUnhealthyNodes:    true,  // 默认过滤不健康节点
 	}, nil
 }
 
@@ -226,6 +241,43 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 				"totalNodes":     len(metrics),
 				"predictionUsed": predictionUsed,
 			}).Debug("Applied state predictions")
+		}
+	}
+
+	// 1.2 【AI异常检测】检测并过滤不健康节点
+	if s.anomalyDetectionEnabled && s.anomalyDetector != nil {
+		// 执行异常检测
+		anomalyResults := s.anomalyDetector.DetectBatch(metrics)
+
+		// 记录检测到的异常
+		if len(anomalyResults) > 0 {
+			for nodeName, nodeAnomalies := range anomalyResults {
+				for _, a := range nodeAnomalies {
+					s.log.WithFields(logrus.Fields{
+						"node":     nodeName,
+						"type":     a.Type,
+						"severity": a.Severity,
+						"message":  a.Message,
+					}).Warn("Anomaly detected")
+				}
+			}
+		}
+
+		// 过滤不健康节点
+		if s.filterUnhealthyNodes {
+			healthyMetrics := s.anomalyDetector.FilterHealthyMetrics(metrics)
+			if len(healthyMetrics) < len(metrics) {
+				s.log.WithFields(logrus.Fields{
+					"totalNodes":   len(metrics),
+					"healthyNodes": len(healthyMetrics),
+					"filtered":     len(metrics) - len(healthyMetrics),
+				}).Info("Filtered unhealthy nodes")
+			}
+			if len(healthyMetrics) == 0 {
+				s.log.Warn("All nodes are unhealthy, using original metrics")
+			} else {
+				metrics = healthyMetrics
+			}
 		}
 	}
 
@@ -504,4 +556,87 @@ func (s *Scheduler) GetPredictionStats() map[string]interface{} {
 		return nil
 	}
 	return s.statePredictor.GetDetailedStats()
+}
+
+// ================ 异常检测相关方法 ================
+
+// SetAnomalyDetectionEnabled 设置是否启用异常检测
+func (s *Scheduler) SetAnomalyDetectionEnabled(enabled bool) {
+	s.anomalyDetectionEnabled = enabled
+	s.log.WithField("enabled", enabled).Info("Anomaly detection setting changed")
+}
+
+// SetFilterUnhealthyNodes 设置是否过滤不健康节点
+func (s *Scheduler) SetFilterUnhealthyNodes(filter bool) {
+	s.filterUnhealthyNodes = filter
+	s.log.WithField("filter", filter).Info("Filter unhealthy nodes setting changed")
+}
+
+// GetAnomalyDetector 获取异常检测器
+func (s *Scheduler) GetAnomalyDetector() *anomaly.AnomalyDetector {
+	return s.anomalyDetector
+}
+
+// GetAnomalyStats 获取异常检测统计信息
+func (s *Scheduler) GetAnomalyStats() map[string]interface{} {
+	if s.anomalyDetector == nil {
+		return nil
+	}
+	return s.anomalyDetector.GetDetailedStats()
+}
+
+// GetHealthyNodes 获取健康节点列表
+func (s *Scheduler) GetHealthyNodes() []string {
+	if s.anomalyDetector == nil {
+		return nil
+	}
+	return s.anomalyDetector.GetHealthyNodes()
+}
+
+// GetUnhealthyNodes 获取不健康节点列表
+func (s *Scheduler) GetUnhealthyNodes() []string {
+	if s.anomalyDetector == nil {
+		return nil
+	}
+	return s.anomalyDetector.GetUnhealthyNodes()
+}
+
+// GetNodeAnomalyState 获取指定节点的异常状态
+func (s *Scheduler) GetNodeAnomalyState(nodeName string) *anomaly.NodeAnomalyState {
+	if s.anomalyDetector == nil {
+		return nil
+	}
+	return s.anomalyDetector.GetNodeState(nodeName)
+}
+
+// GetAnomalyHistory 获取异常历史记录
+func (s *Scheduler) GetAnomalyHistory(limit int) []*anomaly.Anomaly {
+	if s.anomalyDetector == nil {
+		return nil
+	}
+	return s.anomalyDetector.GetAnomalyHistory(limit)
+}
+
+// ================ 综合统计方法 ================
+
+// GetAIStats 获取所有AI模块的统计信息
+func (s *Scheduler) GetAIStats() map[string]interface{} {
+	stats := make(map[string]interface{})
+
+	// 预测器统计
+	if s.statePredictor != nil {
+		stats["predictor"] = s.statePredictor.GetDetailedStats()
+		stats["prediction_enabled"] = s.predictionEnabled
+	}
+
+	// 异常检测器统计
+	if s.anomalyDetector != nil {
+		stats["anomaly_detector"] = s.anomalyDetector.GetDetailedStats()
+		stats["anomaly_detection_enabled"] = s.anomalyDetectionEnabled
+		stats["filter_unhealthy_nodes"] = s.filterUnhealthyNodes
+		stats["healthy_nodes"] = s.anomalyDetector.GetHealthyNodes()
+		stats["unhealthy_nodes"] = s.anomalyDetector.GetUnhealthyNodes()
+	}
+
+	return stats
 }
