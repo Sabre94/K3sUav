@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/k3suav/uav-monitor/pkg/k8s"
+	"github.com/k3suav/uav-monitor/pkg/models"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/algorithm"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/algorithm/greed_nsgaii"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/config"
+	"github.com/k3suav/uav-monitor/pkg/scheduler/predictor"
 	"github.com/sirupsen/logrus"
 
 	v1 "k8s.io/api/core/v1"
@@ -31,6 +33,11 @@ type Scheduler struct {
 
 	// 自适应调度集成（仅用于覆盖率算法）
 	adaptiveIntegration *AdaptiveSchedulerIntegration
+
+	// 状态预测器 - 用于预测数据同步间隔期间的UAV状态
+	statePredictor *predictor.StatePredictor
+	// 是否启用预测
+	predictionEnabled bool
 }
 
 // NewScheduler 创建新的调度器
@@ -86,13 +93,19 @@ func NewScheduler(cfg *config.SchedulerConfig, algo algorithm.SchedulingAlgorith
 		})
 	}
 
+	// 初始化状态预测器
+	predictorConfig := predictor.DefaultConfig()
+	statePredictor := predictor.NewStatePredictor(predictorConfig)
+
 	return &Scheduler{
-		config:       cfg,
-		k8sClientset: clientset,
-		uavClient:    uavClient,
-		algorithm:    algo,
-		algoFactory:  algorithm.NewAlgorithmFactory(), // 初始化算法工厂
-		log:          log,
+		config:            cfg,
+		k8sClientset:      clientset,
+		uavClient:         uavClient,
+		algorithm:         algo,
+		algoFactory:       algorithm.NewAlgorithmFactory(), // 初始化算法工厂
+		log:               log,
+		statePredictor:    statePredictor,
+		predictionEnabled: true, // 默认启用预测
 	}, nil
 }
 
@@ -192,6 +205,29 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *v1.Pod) error {
 	}
 
 	s.log.WithField("nodeCount", len(metrics)).Debug("Fetched UAVMetrics")
+
+	// 1.1 【AI预测增强】使用状态预测器增强数据新鲜度
+	var predictedMetrics []*predictor.PredictedMetrics
+	if s.predictionEnabled && s.statePredictor != nil {
+		predictedMetrics = s.statePredictor.EnhanceMetricsBatch(metrics)
+
+		// 用预测值更新原始metrics（保持接口兼容）
+		metrics = s.applyPredictions(metrics, predictedMetrics)
+
+		// 记录预测使用情况
+		predictionUsed := 0
+		for _, pm := range predictedMetrics {
+			if pm.UsedPrediction {
+				predictionUsed++
+			}
+		}
+		if predictionUsed > 0 {
+			s.log.WithFields(logrus.Fields{
+				"totalNodes":     len(metrics),
+				"predictionUsed": predictionUsed,
+			}).Debug("Applied state predictions")
+		}
+	}
 
 	// 1.5 【新增】根据 Pod annotation 选择算法
 	selectedAlgo, err := s.algoFactory.CreateFromPod(pod, s.algorithm)
@@ -359,4 +395,113 @@ func (s *Scheduler) bindPodToNode(ctx context.Context, pod *v1.Pod, nodeName str
 	}
 
 	return nil
+}
+
+// ================ 状态预测相关方法 ================
+
+// SetPredictionEnabled 设置是否启用预测
+func (s *Scheduler) SetPredictionEnabled(enabled bool) {
+	s.predictionEnabled = enabled
+	s.log.WithField("enabled", enabled).Info("State prediction setting changed")
+}
+
+// GetStatePredictor 获取状态预测器（用于外部访问统计信息等）
+func (s *Scheduler) GetStatePredictor() *predictor.StatePredictor {
+	return s.statePredictor
+}
+
+// applyPredictions 将预测值应用到原始metrics（保持接口兼容性）
+func (s *Scheduler) applyPredictions(original []*models.UAVMetrics, predicted []*predictor.PredictedMetrics) []*models.UAVMetrics {
+	if len(original) != len(predicted) {
+		return original
+	}
+
+	// 创建新的切片，避免修改原始数据
+	result := make([]*models.UAVMetrics, len(original))
+
+	for i, pm := range predicted {
+		// 深拷贝原始数据
+		m := s.copyMetrics(original[i])
+
+		if pm.UsedPrediction {
+			// 应用电池预测
+			if pm.BatteryConfidence > 0.3 {
+				m.Battery.RemainingPercent = pm.PredictedBattery
+			}
+
+			// 应用位置预测
+			if pm.PredictedPosition != nil && pm.PositionConfidence > 0.3 {
+				if m.Position == nil {
+					m.Position = &models.PositionData{}
+				}
+				m.Position.X = pm.PredictedPosition.X
+				m.Position.Y = pm.PredictedPosition.Y
+				m.Position.Z = pm.PredictedPosition.Z
+			}
+
+			// 应用延迟预测
+			if pm.LatencyConfidence > 0.3 {
+				if m.Network == nil {
+					m.Network = &models.NetworkData{}
+				}
+				m.Network.Latency = pm.PredictedLatency
+			}
+		}
+
+		result[i] = m
+	}
+
+	return result
+}
+
+// copyMetrics 深拷贝UAVMetrics
+func (s *Scheduler) copyMetrics(m *models.UAVMetrics) *models.UAVMetrics {
+	copied := &models.UAVMetrics{
+		NodeName: m.NodeName,
+		GPS:      m.GPS,
+		Battery:  m.Battery,
+	}
+
+	if m.Flight != nil {
+		flight := *m.Flight
+		copied.Flight = &flight
+	}
+	if m.Network != nil {
+		network := *m.Network
+		copied.Network = &network
+	}
+	if m.Performance != nil {
+		perf := *m.Performance
+		copied.Performance = &perf
+	}
+	if m.Health != nil {
+		health := *m.Health
+		copied.Health = &health
+	}
+	if m.Metadata != nil {
+		meta := *m.Metadata
+		copied.Metadata = &meta
+	}
+	if m.Position != nil {
+		pos := *m.Position
+		copied.Position = &pos
+	}
+	if m.Velocity != nil {
+		vel := *m.Velocity
+		copied.Velocity = &vel
+	}
+	if m.Simulation != nil {
+		sim := *m.Simulation
+		copied.Simulation = &sim
+	}
+
+	return copied
+}
+
+// GetPredictionStats 获取预测统计信息
+func (s *Scheduler) GetPredictionStats() map[string]interface{} {
+	if s.statePredictor == nil {
+		return nil
+	}
+	return s.statePredictor.GetDetailedStats()
 }
