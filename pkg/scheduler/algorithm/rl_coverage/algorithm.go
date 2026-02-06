@@ -197,10 +197,15 @@ func (a *RLCoverageAlgorithm) SelectNodes(metrics []*models.UAVMetrics) ([]strin
 	}
 
 	// 使用策略网络选择节点
-	selectedNodes := []string{}
+	selectedIndices := []int{}
 	maxSteps := len(metrics)
 
 	for step := 0; step < maxSteps; step++ {
+		// 【关键优化】一旦达到目标覆盖率，立即停止
+		if a.env.GetCurrentCoverage() >= a.config.TargetCoverage {
+			break
+		}
+
 		// 选择动作 (不探索，使用最优策略)
 		action := a.policy.SelectAction(state, false)
 
@@ -212,14 +217,102 @@ func (a *RLCoverageAlgorithm) SelectNodes(metrics []*models.UAVMetrics) ([]strin
 		nextState, _, done := a.env.Step(action)
 		state = nextState // 关键：更新状态用于下一次决策
 
-		selectedNodes = append(selectedNodes, a.env.allNodes[action.NodeIndex].Metrics.NodeName)
+		selectedIndices = append(selectedIndices, action.NodeIndex)
 
 		if done {
 			break
 		}
 	}
 
+	// 【节点效率优化】尝试移除贡献最小的节点
+	selectedIndices = a.optimizeNodeSelection(selectedIndices)
+
+	// 转换为节点名称
+	selectedNodes := make([]string, len(selectedIndices))
+	for i, idx := range selectedIndices {
+		selectedNodes[i] = a.env.allNodes[idx].Metrics.NodeName
+	}
+
 	return selectedNodes, a.env.GetCurrentCoverage(), nil
+}
+
+// optimizeNodeSelection 优化节点选择，移除冗余节点
+func (a *RLCoverageAlgorithm) optimizeNodeSelection(indices []int) []int {
+	if len(indices) <= 1 {
+		return indices
+	}
+
+	targetCov := a.config.TargetCoverage
+
+	// 尝试逐个移除节点，看是否仍能满足覆盖率
+	optimized := make([]int, len(indices))
+	copy(optimized, indices)
+
+	improved := true
+	for improved {
+		improved = false
+
+		// 找到移除后覆盖率下降最小的节点
+		bestRemoveIdx := -1
+		bestCovAfterRemove := 0.0
+
+		for i := 0; i < len(optimized); i++ {
+			// 计算移除这个节点后的覆盖率
+			remaining := make([]int, 0, len(optimized)-1)
+			for j, idx := range optimized {
+				if j != i {
+					remaining = append(remaining, idx)
+				}
+			}
+
+			// 重新计算覆盖率
+			covAfter := a.calculateCoverageForIndices(remaining)
+
+			// 如果移除后仍满足目标，且是目前最好的选择
+			if covAfter >= targetCov && covAfter > bestCovAfterRemove {
+				bestRemoveIdx = i
+				bestCovAfterRemove = covAfter
+			}
+		}
+
+		// 如果找到可以移除的节点
+		if bestRemoveIdx >= 0 {
+			newOptimized := make([]int, 0, len(optimized)-1)
+			for i, idx := range optimized {
+				if i != bestRemoveIdx {
+					newOptimized = append(newOptimized, idx)
+				}
+			}
+			optimized = newOptimized
+			improved = true
+
+			// 更新环境状态
+			a.env.selectedNodes = make([]*NodeInfo, len(optimized))
+			a.env.selectedMask = make([]bool, len(a.env.allNodes))
+			for i, idx := range optimized {
+				a.env.selectedNodes[i] = a.env.allNodes[idx]
+				a.env.selectedMask[idx] = true
+			}
+			a.env.currentCoverage = bestCovAfterRemove
+		}
+	}
+
+	return optimized
+}
+
+// calculateCoverageForIndices 计算指定索引节点的覆盖率
+func (a *RLCoverageAlgorithm) calculateCoverageForIndices(indices []int) float64 {
+	if len(indices) == 0 {
+		return 0
+	}
+
+	nodes := make([]*NodeInfo, len(indices))
+	for i, idx := range indices {
+		nodes[i] = a.env.allNodes[idx]
+	}
+
+	coverage := a.env.calculateCoverage(nodes)
+	return coverage / a.env.maxCoverage
 }
 
 // Train 训练模型

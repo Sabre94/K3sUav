@@ -349,25 +349,75 @@ func (env *Environment) calculateCoverageRatio() float64 {
 	return currentArea / env.maxCoverage
 }
 
-// calculateReward 计算奖励
+// calculateReward 计算奖励 (优化版V2：更激进的节点效率优化)
 func (env *Environment) calculateReward(node *NodeInfo, prevCoverage, newCoverage float64) float64 {
 	reward := 0.0
-
-	// 覆盖率增量奖励
 	coverageGain := newCoverage - prevCoverage
-	reward += coverageGain * env.config.CoverageRewardScale
+	nodeCount := len(env.selectedNodes)
+	totalNodes := len(env.allNodes)
+	targetCov := env.config.TargetCoverage
 
-	// 节点数惩罚 (鼓励用更少节点)
-	reward -= env.config.NodePenalty
+	// 1. 覆盖率增量奖励 - 按边际效率加权
+	if coverageGain > 0 {
+		// 基础奖励
+		reward += coverageGain * env.config.CoverageRewardScale
 
-	// 高电量奖励
-	if node.Features.Battery > 0.7 {
-		reward += env.config.BatteryBonus * (node.Features.Battery - 0.5)
+		// 边际效率奖励：贡献越高，奖励越多
+		expectedGain := targetCov / float64(totalNodes) // 平均每个节点应贡献
+		efficiency := coverageGain / expectedGain
+		if efficiency > 1.5 {
+			reward += 1.0 * (efficiency - 1.0) // 高效节点额外奖励
+		} else if efficiency < 0.5 {
+			reward -= 0.5 // 低效节点惩罚
+		}
+	} else {
+		// 0覆盖贡献，严重惩罚
+		reward -= 2.0
 	}
 
-	// 低延迟奖励
-	if node.Features.Latency < 0.3 {
-		reward += 0.2 * (0.5 - node.Features.Latency)
+	// 2. 动态节点惩罚：基于当前进度
+	basePenalty := env.config.NodePenalty
+	progress := newCoverage / targetCov
+	if progress >= 1.0 {
+		// 已达标，极大惩罚 (不应该再选)
+		basePenalty *= 10.0
+	} else if progress >= 0.95 {
+		// 接近目标，大惩罚
+		basePenalty *= 4.0
+	} else if progress >= 0.85 {
+		basePenalty *= 2.5
+	} else if progress >= 0.70 {
+		basePenalty *= 1.5
+	}
+	reward -= basePenalty
+
+	// 3. 节点使用率惩罚：使用越多节点，惩罚越大
+	nodeRatio := float64(nodeCount) / float64(totalNodes)
+	reward -= nodeRatio * 0.5 // 使用50%节点时额外扣0.25分
+
+	// 4. 达到目标的奖励 (节点越少奖励越大)
+	if newCoverage >= targetCov && prevCoverage < targetCov {
+		// 用更少的节点达标 = 更高奖励
+		efficiencyBonus := (1.0 - nodeRatio) * env.config.TargetBonus * 2
+		reward += efficiencyBonus
+	}
+
+	// 5. 远离已选节点的奖励（减少重叠）
+	if len(env.selectedNodes) > 1 {
+		minDist := math.MaxFloat64
+		for _, selected := range env.selectedNodes[:len(env.selectedNodes)-1] {
+			dist := math.Sqrt(math.Pow(node.XMeters-selected.XMeters, 2) +
+				math.Pow(node.YMeters-selected.YMeters, 2))
+			if dist < minDist {
+				minDist = dist
+			}
+		}
+		// 距离越远（重叠越少），奖励越高
+		if minDist > env.config.CoverageRadius*1.5 {
+			reward += 0.3
+		} else if minDist < env.config.CoverageRadius*0.5 {
+			reward -= 0.3 // 重叠太多
+		}
 	}
 
 	return reward

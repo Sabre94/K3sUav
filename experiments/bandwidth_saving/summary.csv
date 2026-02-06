@@ -1,0 +1,4 @@
+group,report_count,bandwidth_kb,battery_mae,position_mae,decision_mae,decision_correct_rate
+A: 高频上报(1秒),6000,3000.00,0.0000,0.0000,0.0000,100.00
+B: 低频+预测(10秒),600,300.00,0.0067,1.1890,0.0000,100.00
+C: 低频无预测(10秒),600,300.00,0.1565,20.9421,0.0000,100.00
