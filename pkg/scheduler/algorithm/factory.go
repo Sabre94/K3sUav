@@ -11,6 +11,9 @@ import (
 	v1 "k8s.io/api/core/v1"
 )
 
+// AlgorithmCreatorFunc 外部算法创建函数
+type AlgorithmCreatorFunc func(pod *v1.Pod) (SchedulingAlgorithm, error)
+
 // AlgorithmFactory 算法工厂
 // 根据 Pod 的 annotation 动态创建算法实例
 type AlgorithmFactory struct {
@@ -18,6 +21,8 @@ type AlgorithmFactory struct {
 	coverageAlgos map[string]*CoverageBasedAlgorithm
 	// greed-nsgaii 算法的单例缓存（key: "greed-<tasktype>-<coverage>-<radius>"）
 	greedNSGAIIAlgos map[string]*greed_nsgaii.GreedNSGAIIAlgorithm
+	// 外部注册的算法创建函数（避免循环导入）
+	externalCreators map[string]AlgorithmCreatorFunc
 	mu               sync.RWMutex
 }
 
@@ -26,20 +31,28 @@ func NewAlgorithmFactory() *AlgorithmFactory {
 	return &AlgorithmFactory{
 		coverageAlgos:    make(map[string]*CoverageBasedAlgorithm),
 		greedNSGAIIAlgos: make(map[string]*greed_nsgaii.GreedNSGAIIAlgorithm),
+		externalCreators: make(map[string]AlgorithmCreatorFunc),
 	}
+}
+
+// RegisterCreator 注册外部算法创建函数
+func (f *AlgorithmFactory) RegisterCreator(name string, creator AlgorithmCreatorFunc) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.externalCreators[name] = creator
 }
 
 // CreateFromPod 从 Pod annotation 创建算法实例
 // 支持的 annotations:
-//   - uav.scheduler/algorithm: 算法名称 (distance-based, battery-aware, network-latency, composite, coverage-based, greed-nsgaii)
+//   - uav.scheduler/algorithm: 算法名称 (distance-based, battery-aware, network-latency, composite, coverage-based, greed-nsgaii, rl-coverage)
 //   - uav.scheduler/target-lat: 目标纬度 (distance-based)
 //   - uav.scheduler/target-lon: 目标经度 (distance-based)
 //   - uav.scheduler/min-battery: 最低电池百分比 (battery-aware)
 //   - uav.scheduler/max-latency: 最大延迟毫秒 (network-latency)
 //   - uav.scheduler/composite-weights: 组合算法权重，格式: "0.6,0.4" (composite)
 //   - uav.scheduler/task-type: 任务类型 (greed-nsgaii): emergency, sustain, compute, default
-//   - uav.scheduler/target-coverage: 目标覆盖率 (greed-nsgaii): 0.0-1.0
-//   - uav.scheduler/coverage-radius: 覆盖半径（米）(greed-nsgaii)
+//   - uav.scheduler/target-coverage: 目标覆盖率 (greed-nsgaii, rl-coverage): 0.0-1.0
+//   - uav.scheduler/coverage-radius: 覆盖半径（米）(greed-nsgaii, rl-coverage)
 func (f *AlgorithmFactory) CreateFromPod(pod *v1.Pod, defaultAlgo SchedulingAlgorithm) (SchedulingAlgorithm, error) {
 	if pod.Annotations == nil {
 		return defaultAlgo, nil
@@ -73,6 +86,13 @@ func (f *AlgorithmFactory) CreateFromPod(pod *v1.Pod, defaultAlgo SchedulingAlgo
 		return f.createGreedNSGAII(pod)
 
 	default:
+		// 检查外部注册的算法创建函数
+		f.mu.RLock()
+		creator, exists := f.externalCreators[algoName]
+		f.mu.RUnlock()
+		if exists {
+			return creator(pod)
+		}
 		return nil, fmt.Errorf("unsupported algorithm '%s' in pod annotation", algoName)
 	}
 }
@@ -306,3 +326,4 @@ func (a *GreedNSGAIIAdapter) Score(ctx context.Context, pod *v1.Pod, metrics []*
 func (a *GreedNSGAIIAdapter) GetUnderlyingAlgorithm() *greed_nsgaii.GreedNSGAIIAlgorithm {
 	return a.algo
 }
+

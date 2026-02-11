@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -12,9 +13,11 @@ import (
 	"github.com/k3suav/uav-monitor/pkg/scheduler"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/algorithm"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/algorithm/greed_nsgaii"
+	"github.com/k3suav/uav-monitor/pkg/scheduler/algorithm/rl_coverage"
 	schedulerConfig "github.com/k3suav/uav-monitor/pkg/scheduler/config"
 	"github.com/k3suav/uav-monitor/pkg/scheduler/registry"
 	"github.com/sirupsen/logrus"
+	v1 "k8s.io/api/core/v1"
 )
 
 const (
@@ -69,6 +72,21 @@ func main() {
 	}
 
 	log.Info("Scheduler initialized")
+
+	// 5.5 注册 RL-Coverage 算法创建函数（避免循环导入）
+	sched.RegisterAlgorithmCreator("rl-coverage", func(pod *v1.Pod) (algorithm.SchedulingAlgorithm, error) {
+		rlCfg := rl_coverage.DefaultRLConfig()
+		if pod.Annotations != nil {
+			if v, err := strconv.ParseFloat(pod.Annotations["uav.scheduler/target-coverage"], 64); err == nil {
+				rlCfg.TargetCoverage = v
+			}
+			if v, err := strconv.ParseFloat(pod.Annotations["uav.scheduler/coverage-radius"], 64); err == nil {
+				rlCfg.CoverageRadius = v
+			}
+		}
+		return rl_coverage.NewRLCoverageAlgorithm(rlCfg), nil
+	})
+	log.Info("Registered rl-coverage algorithm creator")
 
 	// 6. 设置信号处理
 	ctx, cancel := context.WithCancel(context.Background())
@@ -182,6 +200,14 @@ func registerBuiltinAlgorithms(cfg *schedulerConfig.SchedulerConfig) {
 	)
 	registry.Register(greedNsgaiiAlgo)
 	log.Debugf("Registered algorithm: %s", greedNsgaiiAlgo.Name())
+
+	// 7. RL-Coverage 算法（强化学习覆盖率优化）
+	rlConfig := rl_coverage.DefaultRLConfig()
+	rlConfig.TargetCoverage = cfg.AdaptiveParams.TargetCoverage
+	rlConfig.CoverageRadius = cfg.AdaptiveParams.CoverageRadius
+	rlCoverageAlgo := rl_coverage.NewRLCoverageAlgorithm(rlConfig)
+	registry.Register(rlCoverageAlgo)
+	log.Debugf("Registered algorithm: %s", rlCoverageAlgo.Name())
 
 	log.WithField("algorithms", registry.List()).Info("Built-in algorithms registered")
 }

@@ -124,6 +124,11 @@ func NewScheduler(cfg *config.SchedulerConfig, algo algorithm.SchedulingAlgorith
 	}, nil
 }
 
+// RegisterAlgorithmCreator 注册外部算法创建函数到工厂
+func (s *Scheduler) RegisterAlgorithmCreator(name string, creator algorithm.AlgorithmCreatorFunc) {
+	s.algoFactory.RegisterCreator(name, creator)
+}
+
 // SetAdaptiveIntegration 设置自适应调度集成（仅用于覆盖率算法）
 func (s *Scheduler) SetAdaptiveIntegration(integration *AdaptiveSchedulerIntegration) {
 	s.adaptiveIntegration = integration
